@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Peirce Quincuncial 歪みリスクランキング</title>
+<style>
+/* ===== Reset & Base ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0f1117;
+  --bg2: #181b24;
+  --bg3: #222633;
+  --fg: #e0e4ef;
+  --fg2: #8b91a5;
+  --accent: #5ba4f5;
+  --accent2: #38d9a9;
+  --danger: #f06595;
+  --warn: #fcc419;
+  --radius: 8px;
+  --font: "Segoe UI", "Meiryo", sans-serif;
+  --mono: "Cascadia Code", "Consolas", monospace;
+}
+body { font-family: var(--font); background: var(--bg); color: var(--fg); line-height: 1.6; min-height: 100vh; }
+a { color: var(--accent); text-decoration: none; }
+button {
+  font-family: var(--font); cursor: pointer; border: none; border-radius: var(--radius);
+  padding: 8px 16px; font-size: 14px; transition: all .15s;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: #4a93e4; }
+.btn-secondary { background: var(--bg3); color: var(--fg); border: 1px solid #333a4a; }
+.btn-secondary:hover { background: #2a2f3e; }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+input[type="number"], input[type="range"], select {
+  font-family: var(--font); background: var(--bg3); color: var(--fg);
+  border: 1px solid #333a4a; border-radius: 4px; padding: 4px 8px;
+}
+input[type="number"] { width: 80px; }
+
+/* ===== Layout ===== */
+.app-header {
+  background: var(--bg2); border-bottom: 1px solid #2a2e3a;
+  padding: 12px 24px; display: flex; align-items: center; gap: 16px;
+}
+.app-header h1 { font-size: 18px; font-weight: 600; color: var(--accent); }
+.app-header .subtitle { font-size: 12px; color: var(--fg2); }
+.tabs {
+  display: flex; gap: 2px; background: var(--bg); padding: 4px;
+  border-radius: var(--radius); margin-left: auto;
+}
+.tab {
+  padding: 6px 16px; border-radius: 6px; font-size: 13px;
+  background: transparent; color: var(--fg2); cursor: pointer;
+}
+.tab.active { background: var(--accent); color: #fff; }
+.tab:hover:not(.active) { background: var(--bg3); color: var(--fg); }
+
+.main { display: flex; height: calc(100vh - 52px); }
+.sidebar {
+  width: 300px; min-width: 260px; background: var(--bg2);
+  border-right: 1px solid #2a2e3a; overflow-y: auto; padding: 16px;
+  flex-shrink: 0;
+}
+.content { flex: 1; overflow-y: auto; padding: 20px; }
+
+/* ===== Drop Zone ===== */
+.drop-zone {
+  border: 2px dashed #3a3f52; border-radius: 12px;
+  padding: 60px 32px; text-align: center; margin: 60px auto;
+  max-width: 600px; transition: all .2s;
+}
+.drop-zone.active { border-color: var(--accent); background: rgba(91,164,245,.08); }
+.drop-zone h2 { font-size: 20px; margin-bottom: 8px; }
+.drop-zone p { color: var(--fg2); margin-bottom: 16px; font-size: 14px; }
+.drop-zone input[type="file"] { display: none; }
+
+/* ===== Progress ===== */
+.progress-bar-wrap {
+  background: var(--bg3); border-radius: 6px; height: 8px; margin: 12px 0;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width .3s; border-radius: 6px;
+}
+.progress-msg { font-size: 13px; color: var(--fg2); }
+
+/* ===== Ranking Table ===== */
+.ranking-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ranking-table th {
+  text-align: left; padding: 8px 10px; border-bottom: 2px solid #2a2e3a;
+  color: var(--fg2); font-weight: 500; cursor: pointer; user-select: none;
+  white-space: nowrap;
+}
+.ranking-table th:hover { color: var(--fg); }
+.ranking-table th .sort-arrow { font-size: 10px; margin-left: 4px; }
+.ranking-table td { padding: 6px 10px; border-bottom: 1px solid #1e222e; vertical-align: middle; }
+.ranking-table tr:hover td { background: rgba(91,164,245,.06); }
+.ranking-table tr.selected td { background: rgba(91,164,245,.15); }
+.rank-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50%; font-weight: 700; font-size: 12px;
+}
+.rank-1 { background: #fcc419; color: #000; }
+.rank-2 { background: #adb5bd; color: #000; }
+.rank-3 { background: #cd7f32; color: #fff; }
+.rank-n { background: var(--bg3); color: var(--fg2); }
+.thumb-cell img { width: 48px; height: 48px; border-radius: 4px; object-fit: cover; }
+.score-bar {
+  display: inline-block; height: 6px; border-radius: 3px;
+  background: var(--accent); min-width: 4px;
+}
+
+/* ===== Detail View ===== */
+.detail-panel { display: grid; gap: 16px; }
+.detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 8px; }
+.detail-header h2 { font-size: 22px; }
+.detail-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.stat-card {
+  background: var(--bg3); padding: 12px; border-radius: var(--radius);
+}
+.stat-card .label { font-size: 11px; color: var(--fg2); text-transform: uppercase; }
+.stat-card .value { font-size: 20px; font-weight: 600; font-family: var(--mono); }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.image-card {
+  background: var(--bg2); border-radius: var(--radius); overflow: hidden;
+  border: 1px solid #2a2e3a;
+}
+.image-card .card-label {
+  padding: 8px 12px; font-size: 12px; font-weight: 600;
+  border-bottom: 1px solid #2a2e3a; color: var(--fg2);
+}
+.image-card img { width: 100%; height: auto; display: block; }
+
+/* ===== Compare View ===== */
+.compare-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+.compare-col {
+  flex: 0 0 260px; background: var(--bg2); border-radius: var(--radius);
+  border: 1px solid #2a2e3a; overflow: hidden;
+}
+.compare-col .col-header {
+  padding: 10px; text-align: center; border-bottom: 1px solid #2a2e3a;
+}
+.compare-col .col-header .lon-label { font-size: 16px; font-weight: 700; }
+.compare-col .col-header .score-label { font-size: 12px; color: var(--fg2); }
+.compare-col img { width: 100%; display: block; }
+.compare-col .col-stat { padding: 6px 10px; font-size: 12px; border-top: 1px solid #1e222e; }
+
+/* ===== Sidebar Sections ===== */
+.sidebar h3 {
+  font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--fg2); margin-bottom: 8px; margin-top: 16px;
+}
+.sidebar h3:first-child { margin-top: 0; }
+.param-row {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px;
+}
+.param-row label { flex: 1; min-width: 0; color: var(--fg2); }
+.param-row input[type="number"] { width: 68px; font-size: 12px; }
+.sidebar .actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+
+/* ===== Alerts ===== */
+.alert {
+  padding: 12px 16px; border-radius: var(--radius); margin-bottom: 12px;
+  font-size: 13px;
+}
+.alert-info { background: rgba(91,164,245,.12); border: 1px solid rgba(91,164,245,.3); }
+.alert-warn { background: rgba(252,196,25,.1); border: 1px solid rgba(252,196,25,.3); color: var(--warn); }
+.alert-error { background: rgba(240,101,149,.1); border: 1px solid rgba(240,101,149,.3); color: var(--danger); }
+
+/* ===== Filter Row ===== */
+.filter-row {
+  display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap;
+}
+.filter-row label { font-size: 12px; color: var(--fg2); }
+.filter-row select, .filter-row input { font-size: 12px; }
+
+/* ===== Responsive ===== */
+@media (max-width: 900px) {
+  .main { flex-direction: column; }
+  .sidebar { width: 100%; max-height: 280px; }
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #3a3f52; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ===== Header ===== -->
+<header class="app-header">
+  <div>
+    <h1>Peirce Quincuncial Ranker</h1>
+    <div class="subtitle">歪みリスク・プロキシによるランキング — 真の歪みテンソルではありません</div>
+  </div>
+  <div class="tabs" id="tabs">
+    <div class="tab active" data-tab="ranking">ランキング</div>
+    <div class="tab" data-tab="detail">詳細</div>
+    <div class="tab" data-tab="compare">比較</div>
+  </div>
+</header>
+
+<div class="main">
+  <!-- ===== Sidebar ===== -->
+  <aside class="sidebar" id="sidebar" style="display:none">
+    <h3>解析パラメータ</h3>
+
+    <div class="param-row">
+      <label>解像度</label>
+      <input type="number" id="p_raster_size" value="512" min="256" max="2048" step="128">
+    </div>
+
+    <h3>特異点ペナルティ</h3>
+    <div class="param-row">
+      <label>σ_point 比率</label>
+      <input type="number" id="p_sigma_point_ratio" value="0.065" min="0.01" max="0.2" step="0.005">
+    </div>
+    <div class="param-row">
+      <label>重み (point)</label>
+      <input type="number" id="p_weight_point" value="0.35" min="0" max="1" step="0.05">
+    </div>
+
+    <h3>辺中央帯</h3>
+    <div class="param-row">
+      <label>σ_tangent</label>
+      <input type="number" id="p_sigma_tangent_ratio" value="0.12" min="0.02" max="0.3" step="0.01">
+    </div>
+    <div class="param-row">
+      <label>σ_normal</label>
+      <input type="number" id="p_sigma_normal_ratio" value="0.07" min="0.02" max="0.2" step="0.01">
+    </div>
+    <div class="param-row">
+      <label>重み (band)</label>
+      <input type="number" id="p_weight_band" value="0.45" min="0" max="1" step="0.05">
+    </div>
+
+    <h3>外周ペナルティ</h3>
+    <div class="param-row">
+      <label>soft limit</label>
+      <input type="number" id="p_edge_soft_limit_ratio" value="0.18" min="0.05" max="0.4" step="0.01">
+    </div>
+    <div class="param-row">
+      <label>重み (edge)</label>
+      <input type="number" id="p_weight_edge" value="0.20" min="0" max="1" step="0.05">
+    </div>
+
+    <h3>海岸線</h3>
+    <div class="param-row">
+      <label>coast 重み</label>
+      <input type="number" id="p_coast_weight" value="1.35" min="1" max="2" step="0.05">
+    </div>
+    <div class="param-row">
+      <label>coast 距離 px</label>
+      <input type="number" id="p_coast_distance_px" value="6" min="1" max="20" step="1">
+    </div>
+
+    <h3>最終スコア</h3>
+    <div class="param-row">
+      <label>mean 重み</label>
+      <input type="number" id="p_weight_mean" value="0.50" min="0" max="1" step="0.05">
+    </div>
+    <div class="param-row">
+      <label>p95 重み</label>
+      <input type="number" id="p_weight_p95" value="0.30" min="0" max="1" step="0.05">
+    </div>
+    <div class="param-row">
+      <label>fraction 重み</label>
+      <input type="number" id="p_weight_fraction" value="0.20" min="0" max="1" step="0.05">
+    </div>
+
+    <h3>その他</h3>
+    <div class="param-row">
+      <label>背景色閾値</label>
+      <input type="number" id="p_bg_color_tolerance" value="40" min="10" max="100" step="5">
+    </div>
+    <div class="param-row">
+      <label>最小陸地面積</label>
+      <input type="number" id="p_min_land_area" value="80" min="10" max="500" step="10">
+    </div>
+    <div class="param-row">
+      <label>高リスク閾値 (0=auto)</label>
+      <input type="number" id="p_high_risk_threshold" value="0" min="0" max="1" step="0.05">
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" onclick="reanalyze()">パラメータで再解析</button>
+      <button class="btn-secondary" onclick="exportCSV()">CSV エクスポート</button>
+      <button class="btn-secondary" onclick="exportJSON()">JSON エクスポート</button>
+    </div>
+  </aside>
+
+  <!-- ===== Content ===== -->
+  <div class="content" id="content">
+    <!-- Drop Zone (初期状態) -->
+    <div id="dropZone" class="drop-zone">
+      <h2>ZIP ファイルをドロップ</h2>
+      <p>Peirce quincuncial SVG を含む ZIP を選択してください<br>
+         <small>lon ごとに combined / map / text の 3 枚を 1 ケースとして統合します</small></p>
+      <button class="btn-primary" onclick="document.getElementById('fileInput').click()">
+        ファイルを選択
+      </button>
+      <input type="file" id="fileInput" accept=".zip">
+    </div>
+
+    <!-- Progress -->
+    <div id="progressArea" style="display:none; max-width:500px; margin:80px auto; text-align:center;">
+      <h2 style="margin-bottom:16px">解析中…</h2>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar" id="progressBar" style="width:0%"></div>
+      </div>
+      <div class="progress-msg" id="progressMsg"></div>
+    </div>
+
+    <!-- Ranking View -->
+    <div id="rankingView" style="display:none">
+      <div class="alert alert-info">
+        ⚠ 以下のスコアは Peirce quincuncial の既知の高歪み領域との重なりに基づく<strong>プロキシ指標</strong>です。
+        厳密な微分幾何学的歪みテンソルではありません。スコアが低いほど陸上歪みリスクが小さいと推定されます。
+      </div>
+
+      <div class="filter-row">
+        <label>表示件数:</label>
+        <select id="limitSelect" onchange="loadResults()">
+          <option value="0">全件</option>
+          <option value="10">上位10</option>
+          <option value="20" selected>上位20</option>
+          <option value="50">上位50</option>
+        </select>
+        <label>ソート:</label>
+        <select id="sortSelect" onchange="loadResults()">
+          <option value="final_score">最終スコア ↑</option>
+          <option value="mean_risk">平均リスク ↑</option>
+          <option value="p95_risk">P95 リスク ↑</option>
+          <option value="high_risk_fraction">高リスク比率 ↑</option>
+          <option value="lon">経度 ↑</option>
+        </select>
+        <span style="font-size:12px;color:var(--fg2)" id="caseCount"></span>
+      </div>
+
+      <table class="ranking-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Lon</th>
+            <th>プレビュー</th>
+            <th>最終スコア</th>
+            <th>平均リスク</th>
+            <th>P95</th>
+            <th>高リスク比率</th>
+            <th>陸地率</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rankingBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Detail View -->
+    <div id="detailView" style="display:none">
+      <div id="detailContent">
+        <p style="color:var(--fg2)">ランキング表から lon を選択してください</p>
+      </div>
+    </div>
+
+    <!-- Compare View -->
+    <div id="compareView" style="display:none">
+      <div class="filter-row">
+        <label>比較対象を追加:</label>
+        <select id="compareSelect">
+          <option value="">-- lon 選択 --</option>
+        </select>
+        <button class="btn-sm btn-primary" onclick="addCompare()">追加</button>
+        <button class="btn-sm btn-secondary" onclick="clearCompare()">クリア</button>
+        <button class="btn-sm btn-secondary" onclick="autoTop3()">上位3自動</button>
+      </div>
+      <div class="compare-row" id="compareRow"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===========================================================================
+// State
+// ===========================================================================
+let results = [];
+let currentTab = "ranking";
+let selectedLon = null;
+let compareLons = [];
+let pollTimer = null;
+
+// ===========================================================================
+// Tabs
+// ===========================================================================
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    currentTab = t.dataset.tab;
+    showTab(currentTab);
+  });
+});
+
+function showTab(tab) {
+  document.getElementById("rankingView").style.display = tab === "ranking" ? "" : "none";
+  document.getElementById("detailView").style.display = tab === "detail" ? "" : "none";
+  document.getElementById("compareView").style.display = tab === "compare" ? "" : "none";
+}
+
+// ===========================================================================
+// File Drop & Upload
+// ===========================================================================
+const dropZone = document.getElementById("dropZone");
+const fileInput = document.getElementById("fileInput");
+
+["dragenter", "dragover"].forEach(ev => {
+  dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.add("active"); });
+});
+["dragleave", "drop"].forEach(ev => {
+  dropZone.addEventListener(ev, e => { e.preventDefault(); dropZone.classList.remove("active"); });
+});
+dropZone.addEventListener("drop", e => { if (e.dataTransfer.files[0]) uploadZip(e.dataTransfer.files[0]); });
+fileInput.addEventListener("change", e => { if (e.target.files[0]) uploadZip(e.target.files[0]); });
+
+async function uploadZip(file) {
+  document.getElementById("dropZone").style.display = "none";
+  document.getElementById("progressArea").style.display = "";
+
+  const fd = new FormData();
+  fd.append("zip", file);
+  // パラメータもフォームに載せる
+  for (const [key, el] of paramFields()) {
+    fd.append(key, el.value);
+  }
+
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) {
+      showError(data.error);
+      return;
+    }
+    startPolling();
+  } catch (e) {
+    showError("アップロード失敗: " + e.message);
+  }
+}
+
+// ===========================================================================
+// Polling
+// ===========================================================================
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollStatus, 800);
+}
+
+async function pollStatus() {
+  try {
+    const res = await fetch("/api/status");
+    const s = await res.json();
+    document.getElementById("progressBar").style.width = s.progress + "%";
+    document.getElementById("progressMsg").textContent = s.progress_msg;
+
+    if (s.status === "done") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      document.getElementById("progressArea").style.display = "none";
+      document.getElementById("sidebar").style.display = "";
+      document.getElementById("rankingView").style.display = "";
+      showTab("ranking");
+      loadResults();
+    } else if (s.status === "error") {
+      clearInterval(pollTimer);
+      showError(s.error);
+    }
+  } catch (e) {
+    // ignore transient
+  }
+}
+
+function showError(msg) {
+  document.getElementById("progressArea").style.display = "none";
+  const el = document.createElement("div");
+  el.className = "alert alert-error";
+  el.textContent = "エラー: " + msg;
+  document.getElementById("content").prepend(el);
+}
+
+// ===========================================================================
+// Results
+// ===========================================================================
+async function loadResults() {
+  const sort = document.getElementById("sortSelect").value;
+  const limit = document.getElementById("limitSelect").value;
+  const res = await fetch(`/api/results?sort=${sort}&limit=${limit}`);
+  results = await res.json();
+
+  document.getElementById("caseCount").textContent =
+    `${results.length} ケース表示 (同一 lon の combined/map/text は統合済み)`;
+
+  const tbody = document.getElementById("rankingBody");
+  tbody.innerHTML = "";
+
+  const maxScore = Math.max(...results.map(r => r.final_score), 0.001);
+
+  results.forEach(r => {
+    const tr = document.createElement("tr");
+    tr.className = r.lon === selectedLon ? "selected" : "";
+    const rankClass = r.rank <= 3 ? `rank-${r.rank}` : "rank-n";
+    const barW = Math.max(4, (r.final_score / maxScore) * 100);
+
+    tr.innerHTML = `
+      <td><span class="rank-badge ${rankClass}">${r.rank}</span></td>
+      <td style="font-family:var(--mono);font-weight:600">${r.lon}°</td>
+      <td class="thumb-cell">${r.thumb ? `<img src="${r.thumb}">` : "—"}</td>
+      <td>
+        <span style="font-family:var(--mono)">${r.final_score.toFixed(4)}</span><br>
+        <span class="score-bar" style="width:${barW}%"></span>
+      </td>
+      <td style="font-family:var(--mono)">${r.mean_risk.toFixed(4)}</td>
+      <td style="font-family:var(--mono)">${r.p95_risk.toFixed(4)}</td>
+      <td style="font-family:var(--mono)">${(r.high_risk_fraction * 100).toFixed(1)}%</td>
+      <td style="font-family:var(--mono)">
+        ${r.land_ratio < 0.01
+          ? `<span style="color:var(--danger)" title="陸地が検出できていない可能性があります">⚠ ${(r.land_ratio * 100).toFixed(1)}%</span>`
+          : `${(r.land_ratio * 100).toFixed(1)}%`}
+      </td>
+      <td>
+        <button class="btn-sm btn-secondary" onclick="viewDetail(${r.lon})">詳細</button>
+        <button class="btn-sm btn-secondary" onclick="addCompareByLon(${r.lon})">比較+</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // 比較セレクト更新
+  const sel = document.getElementById("compareSelect");
+  sel.innerHTML = '<option value="">-- lon 選択 --</option>';
+  results.forEach(r => {
+    sel.innerHTML += `<option value="${r.lon}">#${r.rank} lon=${r.lon}° (${r.final_score.toFixed(4)})</option>`;
+  });
+}
+
+// ===========================================================================
+// Detail View
+// ===========================================================================
+async function viewDetail(lon) {
+  selectedLon = lon;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelector('[data-tab="detail"]').classList.add("active");
+  showTab("detail");
+
+  const dc = document.getElementById("detailContent");
+  dc.innerHTML = '<p style="color:var(--fg2)">読み込み中…</p>';
+
+  const res = await fetch(`/api/detail/${lon}`);
+  const d = await res.json();
+  if (d.error) {
+    dc.innerHTML = `<div class="alert alert-error">${d.error}</div>`;
+    return;
+  }
+
+  dc.innerHTML = `
+    <div class="detail-panel">
+      <div class="detail-header">
+        <h2>lon = ${d.lon}°</h2>
+        <button class="btn-sm btn-secondary" onclick="addCompareByLon(${d.lon})">比較に追加</button>
+      </div>
+
+      <div class="detail-stats">
+        <div class="stat-card">
+          <div class="label">最終スコア</div>
+          <div class="value" style="color:var(--accent)">${d.final_score.toFixed(5)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">平均リスク</div>
+          <div class="value">${d.mean_risk.toFixed(5)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">P95 リスク</div>
+          <div class="value">${d.p95_risk.toFixed(5)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">高リスク陸地比率</div>
+          <div class="value">${(d.high_risk_fraction * 100).toFixed(2)}%</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">陸地ピクセル数</div>
+          <div class="value">${d.land_pixel_count.toLocaleString()}</div>
+        </div>
+        <div class="stat-card">
+          <div class="label">陸地面積率</div>
+          <div class="value">${(d.land_ratio * 100).toFixed(1)}%</div>
+        </div>
+      </div>
+
+      ${d.mask_diag ? `
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;color:var(--fg2);font-size:13px">マスク検出診断情報</summary>
+        <div style="background:var(--bg3);padding:10px;border-radius:6px;margin-top:6px;font-size:12px;font-family:var(--mono)">
+          <div>海色推定方式: <strong>${d.mask_diag.method || '?'}</strong></div>
+          ${d.mask_diag.hist_color ? `<div>ヒストグラム最頻色: RGB(${d.mask_diag.hist_color.map(v=>Math.round(v)).join(', ')}) — 占有率: ${((d.mask_diag.hist_ratio||0)*100).toFixed(1)}%</div>` : ''}
+          ${d.mask_diag.edge_color ? `<div>辺縁最頻色: RGB(${d.mask_diag.edge_color.map(v=>Math.round(v)).join(', ')}) — 占有率: ${((d.mask_diag.edge_ratio||0)*100).toFixed(1)}%</div>` : ''}
+          ${d.mask_diag.corner_color ? `<div>四隅中央値色: RGB(${d.mask_diag.corner_color.map(v=>Math.round(v)).join(', ')})</div>` : ''}
+          <div>確定海面積率: ${((d.mask_diag.confirmed_sea_ratio||0)*100).toFixed(1)}%</div>
+          <div>陸地ピクセル: ${d.mask_diag.land_pixels || 0} (${((d.mask_diag.land_ratio||0)*100).toFixed(1)}%)</div>
+          <div>海ラベル数: ${d.mask_diag.sea_labels_total || 0} (辺接続: ${d.mask_diag.sea_labels_edge || 0})</div>
+          ${d.mask_diag.hist_edge_distance !== undefined ? `<div>ヒストグラム⇔辺色距離: ${d.mask_diag.hist_edge_distance.toFixed(1)}</div>` : ''}
+        </div>
+      </details>
+      ` : ''}
+
+      <h3 style="margin-top:16px;color:var(--fg2)">SVG 原画</h3>
+      <div class="image-grid">
+        ${d.images.combined_svg ? `
+        <div class="image-card">
+          <div class="card-label">combined.svg</div>
+          <img src="data:image/svg+xml;base64,${d.images.combined_svg}">
+        </div>` : ""}
+        ${d.images.map_svg ? `
+        <div class="image-card">
+          <div class="card-label">map.svg（採点対象）</div>
+          <img src="data:image/svg+xml;base64,${d.images.map_svg}">
+        </div>` : ""}
+        ${d.images.text_svg ? `
+        <div class="image-card">
+          <div class="card-label">text.svg</div>
+          <img src="data:image/svg+xml;base64,${d.images.text_svg}">
+        </div>` : ""}
+      </div>
+
+      <h3 style="margin-top:16px;color:var(--fg2)">解析画像</h3>
+      <div class="image-grid">
+        ${d.images.raster ? `
+        <div class="image-card">
+          <div class="card-label">ラスタライズ結果 (CairoSVG出力)</div>
+          <img src="${d.images.raster}">
+        </div>` : ""}
+        ${d.images.land_mask ? `
+        <div class="image-card">
+          <div class="card-label">陸地マスク (白=陸)</div>
+          <img src="${d.images.land_mask}">
+        </div>` : ""}
+        ${d.images.coastline ? `
+        <div class="image-card">
+          <div class="card-label">海岸線マスク</div>
+          <img src="${d.images.coastline}">
+        </div>` : ""}
+        ${d.images.heatmap ? `
+        <div class="image-card">
+          <div class="card-label">歪みリスクヒートマップ</div>
+          <img src="${d.images.heatmap}">
+        </div>` : ""}
+        ${d.images.overlay ? `
+        <div class="image-card">
+          <div class="card-label">高リスクゾーン オーバーレイ</div>
+          <img src="${d.images.overlay}">
+        </div>` : ""}
+      </div>
+    </div>
+  `;
+
+  // ランキング行もハイライト
+  loadResults();
+}
+
+// ===========================================================================
+// Compare View
+// ===========================================================================
+function addCompareByLon(lon) {
+  if (!compareLons.includes(lon)) {
+    compareLons.push(lon);
+    renderCompare();
+  }
+}
+
+function addCompare() {
+  const sel = document.getElementById("compareSelect");
+  const lon = parseInt(sel.value);
+  if (!isNaN(lon)) addCompareByLon(lon);
+}
+
+function clearCompare() {
+  compareLons = [];
+  renderCompare();
+}
+
+function autoTop3() {
+  compareLons = results.slice(0, 3).map(r => r.lon);
+  renderCompare();
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelector('[data-tab="compare"]').classList.add("active");
+  showTab("compare");
+}
+
+async function renderCompare() {
+  const row = document.getElementById("compareRow");
+  row.innerHTML = "";
+
+  for (const lon of compareLons) {
+    const res = await fetch(`/api/detail/${lon}`);
+    const d = await res.json();
+    if (d.error) continue;
+
+    const r = results.find(x => x.lon === lon) || {};
+    const col = document.createElement("div");
+    col.className = "compare-col";
+    col.innerHTML = `
+      <div class="col-header">
+        <div class="lon-label">#${r.rank || "?"} lon=${lon}°</div>
+        <div class="score-label">スコア: ${d.final_score.toFixed(4)}</div>
+      </div>
+      ${d.images.overlay ? `<img src="${d.images.overlay}" title="高リスクオーバーレイ">` : ""}
+      ${d.images.heatmap ? `<img src="${d.images.heatmap}" title="ヒートマップ">` : ""}
+      <div class="col-stat">平均: ${d.mean_risk.toFixed(4)}</div>
+      <div class="col-stat">P95: ${d.p95_risk.toFixed(4)}</div>
+      <div class="col-stat">高リスク: ${(d.high_risk_fraction * 100).toFixed(1)}%</div>
+      <div class="col-stat">陸地率: ${(d.land_ratio * 100).toFixed(1)}%</div>
+    `;
+    row.appendChild(col);
+  }
+}
+
+// ===========================================================================
+// Reanalyze
+// ===========================================================================
+async function reanalyze() {
+  const params = {};
+  for (const [key, el] of paramFields()) {
+    params[key] = el.value;
+  }
+
+  document.getElementById("rankingView").style.display = "none";
+  document.getElementById("detailView").style.display = "none";
+  document.getElementById("compareView").style.display = "none";
+  document.getElementById("progressArea").style.display = "";
+
+  const res = await fetch("/api/reanalyze", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(params),
+  });
+  const data = await res.json();
+  if (data.error) {
+    showError(data.error);
+    return;
+  }
+  startPolling();
+}
+
+// ===========================================================================
+// Export
+// ===========================================================================
+function exportCSV() { window.open("/api/export/csv"); }
+function exportJSON() { window.open("/api/export/json"); }
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+function paramFields() {
+  const fields = [
+    "raster_size", "sigma_point_ratio", "sigma_tangent_ratio", "sigma_normal_ratio",
+    "edge_soft_limit_ratio", "weight_band", "weight_point", "weight_edge",
+    "coast_weight", "coast_distance_px", "weight_mean", "weight_p95", "weight_fraction",
+    "bg_color_tolerance", "min_land_area", "high_risk_threshold",
+  ];
+  return fields.map(f => [f, document.getElementById("p_" + f)]).filter(([, el]) => el);
+}
+</script>
+</body>
+</html>
