@@ -895,8 +895,8 @@ function extractSouthPolarCoastline(points, context) {
 
   const coastline = [];
   const count = vertices.length;
-  const start = (closureRun.end + 1) % count;
-  const end = (closureRun.start - 1 + count) % count;
+  const start = closureRun.end % count;
+  const end = closureRun.start % count;
   let index = start;
 
   while (true) {
@@ -965,7 +965,7 @@ function clipPolylineToVerticalBand(points, minX, maxX) {
   return segments;
 }
 
-function splitPolylineAtLargeXJumps(points, threshold) {
+function splitPolylineAtLargeXJumps(points, threshold, period = null, wrapStart = null) {
   if (points.length < 2) return points.length ? [points] : [];
   const segments = [];
   let current = [points[0]];
@@ -974,6 +974,22 @@ function splitPolylineAtLargeXJumps(points, threshold) {
     const previous = points[index - 1];
     const point = points[index];
     if (Math.abs(point[0] - previous[0]) > threshold) {
+      if (period && Number.isFinite(wrapStart)) {
+        const wrapEnd = wrapStart + period;
+        const jumpedForward = point[0] > previous[0];
+        const boundaryA = jumpedForward ? wrapStart : wrapEnd;
+        const boundaryB = jumpedForward ? wrapEnd : wrapStart;
+        const adjustedPointX = jumpedForward ? point[0] - period : point[0] + period;
+        const deltaX = adjustedPointX - previous[0];
+        const t = deltaX === 0 ? 0.5 : (boundaryA - previous[0]) / deltaX;
+        const seamPointA = [boundaryA, previous[1] + (point[1] - previous[1]) * t];
+        const seamPointB = [boundaryB, seamPointA[1]];
+        current.push(seamPointA);
+        if (current.length >= 2) segments.push(dedupeSequentialPoints(current));
+        current = [seamPointB, point];
+        continue;
+      }
+
       if (current.length >= 2) segments.push(current);
       current = [point];
       continue;
@@ -1007,20 +1023,148 @@ function getPolarSectorCorner(sector, side) {
   return [side, 0];
 }
 
-function buildProjectedPolarWedgePath(projectedPoints, corner, context) {
-  const snapped = dedupeSequentialPoints(projectedPoints.map((point) => snapPointToSquare(point, context.side)));
+function getPolarSectorEdges(sector) {
+  if (sector === 0) return ['top', 'left'];
+  if (sector === 1) return ['left', 'bottom'];
+  if (sector === 2) return ['bottom', 'right'];
+  return ['right', 'top'];
+}
+
+function distanceToSquareEdge(point, side, edge) {
+  if (edge === 'left') return Math.abs(point[0]);
+  if (edge === 'right') return Math.abs(point[0] - side);
+  if (edge === 'top') return Math.abs(point[1]);
+  return Math.abs(point[1] - side);
+}
+
+function snapPointToEdge(point, side, edge) {
+  if (edge === 'left') return [0, point[1]];
+  if (edge === 'right') return [side, point[1]];
+  if (edge === 'top') return [point[0], 0];
+  return [point[0], side];
+}
+
+function resolvePolarBoundaryEdges(sector, minX, maxX, seamX, context) {
+  const allowedEdges = getPolarSectorEdges(sector);
+  const sampleY = context.frame.y + context.frame.height - Math.max(0.5, context.frame.height * 0.01);
+  const resolveEdge = (boundaryX) => {
+    const projected = projectShiftedPoint([boundaryX, sampleY], seamX, context);
+    if (!projected) return null;
+    return [...allowedEdges].sort(
+      (a, b) => distanceToSquareEdge(projected, context.side, a) - distanceToSquareEdge(projected, context.side, b),
+    )[0];
+  };
+
+  let minEdge = resolveEdge(minX);
+  let maxEdge = resolveEdge(maxX);
+  if (minEdge && maxEdge && minEdge === maxEdge) {
+    maxEdge = allowedEdges.find((edge) => edge !== minEdge) || maxEdge;
+  }
+  if (!minEdge) [minEdge] = allowedEdges;
+  if (!maxEdge) maxEdge = allowedEdges.find((edge) => edge !== minEdge) || allowedEdges[1];
+  return { min: minEdge, max: maxEdge };
+}
+
+function classifySectorBoundaryPoint(point, minX, maxX, tolerance = 1e-4) {
+  if (Math.abs(point[0] - minX) <= tolerance) return 'min';
+  if (Math.abs(point[0] - maxX) <= tolerance) return 'max';
+  return null;
+}
+
+function isPointOnVerticalBoundary(point, boundaryX, tolerance = 1e-4) {
+  return Math.abs(point[0] - boundaryX) <= tolerance;
+}
+
+function mergeSegmentsAcrossVerticalBoundary(segments, boundaryX, tolerance = 1e-4) {
+  const output = segments.map((segment) => dedupeSequentialPoints(segment)).filter((segment) => segment.length >= 2);
+
+  while (true) {
+    let bestPair = null;
+
+    for (let endIndex = 0; endIndex < output.length; endIndex += 1) {
+      const endSegment = output[endIndex];
+      const endPoint = endSegment[endSegment.length - 1];
+      if (!isPointOnVerticalBoundary(endPoint, boundaryX, tolerance)) continue;
+
+      for (let startIndex = 0; startIndex < output.length; startIndex += 1) {
+        if (startIndex === endIndex) continue;
+        const startSegment = output[startIndex];
+        const startPoint = startSegment[0];
+        if (!isPointOnVerticalBoundary(startPoint, boundaryX, tolerance)) continue;
+
+        const gap = Math.abs(startPoint[1] - endPoint[1]);
+        if (!bestPair || gap < bestPair.gap) {
+          bestPair = { endIndex, startIndex, gap };
+        }
+      }
+    }
+
+    if (!bestPair) break;
+
+    const { endIndex, startIndex } = bestPair;
+    const first = output[endIndex];
+    const second = output[startIndex];
+    const merged = [...first];
+    if (!pointsEqual(first[first.length - 1], second[0], tolerance)) {
+      merged.push(second[0]);
+    }
+    merged.push(...second.slice(1));
+
+    const next = [];
+    for (let index = 0; index < output.length; index += 1) {
+      if (index !== endIndex && index !== startIndex) next.push(output[index]);
+    }
+    next.push(dedupeSequentialPoints(merged));
+    output.splice(0, output.length, ...next);
+  }
+
+  return output;
+}
+
+function buildProjectedPolarWedgePath(coastline, corner, sectorEdges, minX, maxX, seamX, context) {
+  const projected = coastline
+    .map((point) => projectShiftedPoint(point, seamX, context))
+    .filter(Boolean);
+  if (projected.length < 2) return '';
+
+  const snapped = dedupeSequentialPoints(projected.map((point) => snapPointToSquare(point, context.side)));
   if (snapped.length < 2) return '';
+
+  const endpointTolerance = Math.max(1e-4, context.frame.width * 1e-6);
+  const firstBoundary = classifySectorBoundaryPoint(coastline[0], minX, maxX, endpointTolerance);
+  const lastBoundary = classifySectorBoundaryPoint(
+    coastline[coastline.length - 1],
+    minX,
+    maxX,
+    endpointTolerance,
+  );
+  const allowedEdges = [...new Set(Object.values(sectorEdges).filter(Boolean))];
+  const snapPolarEndpoint = (point, boundaryKind) => {
+    const edge = boundaryKind && sectorEdges[boundaryKind]
+      ? sectorEdges[boundaryKind]
+      : [...allowedEdges].sort(
+        (a, b) => distanceToSquareEdge(point, context.side, a) - distanceToSquareEdge(point, context.side, b),
+      )[0];
+    return edge
+      ? snapPointToSquare(snapPointToEdge(point, context.side, edge), context.side)
+      : point;
+  };
+
+  snapped[0] = snapPolarEndpoint(snapped[0], firstBoundary);
+  snapped[snapped.length - 1] = snapPolarEndpoint(snapped[snapped.length - 1], lastBoundary);
+
   return buildPathDataFromPoints([...snapped, corner], true);
 }
 
 function buildPolarSectorProjectedPaths(points, context) {
   const coastline = extractSouthPolarCoastline(points, context) || points;
   if (!coastline || coastline.length < 2) return [];
-
   const seamX = getPolarSeamX(context);
   const shiftedSegments = splitPolylineAtLargeXJumps(
-    shiftPointsAroundSeam(coastline, seamX, context.frame.width),
+    closeCoordinateRing(shiftPointsAroundSeam(coastline, seamX, context.frame.width)),
     context.frame.width / 2,
+    context.frame.width,
+    seamX,
   );
   const sectorWidth = context.frame.width / 4;
   const parts = [];
@@ -1029,15 +1173,30 @@ function buildPolarSectorProjectedPaths(points, context) {
     const minX = seamX + sector * sectorWidth;
     const maxX = minX + sectorWidth;
     const corner = getPolarSectorCorner(sector, context.side);
-
+    const sectorEdges = resolvePolarBoundaryEdges(sector, minX, maxX, seamX, context);
+    const clippedSegments = [];
     for (const shiftedSegment of shiftedSegments) {
-      const clippedSegments = clipPolylineToVerticalBand(shiftedSegment, minX, maxX);
-      for (const segment of clippedSegments) {
-        const projectedPoints = segment
-          .map((point) => projectShiftedPoint(point, seamX, context))
-          .filter(Boolean);
-        const pathData = buildProjectedPolarWedgePath(projectedPoints, corner, context);
-        if (pathData) parts.push(pathData);
+      clippedSegments.push(...clipPolylineToVerticalBand(shiftedSegment, minX, maxX));
+    }
+
+    const mergedSegments = mergeSegmentsAcrossVerticalBoundary(
+      clippedSegments,
+      context.frame.x + context.frame.width,
+      Math.max(1e-4, context.frame.width * 1e-6),
+    );
+
+    for (const segment of mergedSegments) {
+      const wedgePath = buildProjectedPolarWedgePath(
+        segment,
+        corner,
+        sectorEdges,
+        minX,
+        maxX,
+        seamX,
+        context,
+      );
+      if (wedgePath) {
+        parts.push(wedgePath);
       }
     }
   }
@@ -1353,7 +1512,7 @@ function createContext(document, root, options) {
 }
 
 export const DEFAULT_OPTIONS = {
-  lon0: 81,
+  lon0: -143,
   sampleStep: 3,
   pathPrecision: 0.35,
   outputSide: null,

@@ -5,7 +5,7 @@ import { transformSvgString } from '../src/transform.js';
 
 function printUsage() {
   console.log(`Usage:
-  npm run transform -- <input.svg> <output.svg> [--lon0=81] [--sample-step=3] [--path-precision=0.35] [--side=4249.288]
+  npm run transform -- <input.svg> <output.svg> [--lon0=-143] [--sample-step=3] [--path-precision=0.35] [--side=<output-side>]
 `);
 }
 
@@ -36,7 +36,7 @@ async function main() {
   const result = await transformSvgString(
     sourceSvg,
     {
-      lon0: options.lon0 ? Number(options.lon0) : 81,
+      lon0: options.lon0 ? Number(options.lon0) : -143,
       sampleStep: options['sample-step'] ? Number(options['sample-step']) : 3,
       pathPrecision: options['path-precision'] ? Number(options['path-precision']) : 0.35,
       outputSide: options.side ? Number(options.side) : null,
