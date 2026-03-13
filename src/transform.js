@@ -871,6 +871,12 @@ function isPolarSpanningOpenAreaSubpath(subpath, context) {
   return span.spansWidth && (span.touchesSouth || span.touchesNorth);
 }
 
+function isSouthPolarSpanningOpenAreaSubpath(subpath, context) {
+  if (subpath.closed) return false;
+  const span = getPolarSpanInfo(subpath, context);
+  return span.spansWidth && span.touchesSouth;
+}
+
 function isSouthPolarSpanningFilledSubpath(subpath, style, context) {
   if (subpath.points.length < 3 || !hasVisibleFill(style)) return false;
   const span = getPolarSpanInfo(subpath, context);
@@ -1334,7 +1340,7 @@ function buildProjectedPath(element, matrix, style, context) {
       if (closedProjected) parts.push(closedProjected);
     } else if (shouldProjectSubpathAsArea(element, orientedSubpath, style, context)) {
       if (coordinates.length < 3) continue;
-      if (isPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
+      if (isSouthPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
         const polarParts = buildPolarSectorProjectedPaths(points, context);
         parts.push(...polarParts);
         if (polarParts.length > 1) {

@@ -128,3 +128,26 @@ test('transformSvgString merges south-polar split fills into a single evenodd pa
     .filter((node) => node.getAttribute('fill-rule') === 'evenodd');
   assert.ok(evenoddPaths.length >= 1);
 });
+
+test('transformSvgString does not send north-spanning open fills through south-polar corner closure', async () => {
+  const sampleSvg = await readFile(new URL('../イラレ出界図.svg', import.meta.url), 'utf8');
+  const result = await transformSvgString(
+    sampleSvg,
+    {
+      centerLon: 45,
+      centerLat: -30,
+      roll: 45,
+      outputSide: 720,
+    },
+    { DOMParser, XMLSerializer },
+  );
+
+  const document = parseDocument(result.svgText);
+  const secondContour = Array.from(document.getElementsByTagName('g'))
+    .find((node) => node.getAttribute('id') === '_第二分高面');
+  assert.ok(secondContour);
+
+  const evenoddPaths = Array.from(secondContour.getElementsByTagName('path'))
+    .filter((node) => node.getAttribute('fill-rule') === 'evenodd');
+  assert.equal(evenoddPaths.length, 0);
+});
