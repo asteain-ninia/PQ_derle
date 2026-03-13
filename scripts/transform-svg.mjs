@@ -5,7 +5,8 @@ import { transformSvgString } from '../src/transform.js';
 
 function printUsage() {
   console.log(`Usage:
-  npm run transform -- <input.svg> <output.svg> [--lon0=-143] [--sample-step=3] [--path-precision=0.35] [--side=<output-side>]
+  npm run transform -- <input.svg> <output.svg> [--center-lon=-143] [--center-lat=0] [--roll=0]
+    [--lon0=-143] [--sample-step=3] [--path-precision=0.35] [--side=<output-side>]
 `);
 }
 
@@ -33,10 +34,16 @@ async function main() {
 
   const [inputPath, outputPath] = positional;
   const sourceSvg = await fs.readFile(inputPath, 'utf8');
+  const centerLon = options['center-lon'] ? Number(options['center-lon']) : (
+    options.lon0 ? Number(options.lon0) : -143
+  );
   const result = await transformSvgString(
     sourceSvg,
     {
-      lon0: options.lon0 ? Number(options.lon0) : -143,
+      centerLon,
+      centerLat: options['center-lat'] ? Number(options['center-lat']) : 0,
+      roll: options.roll ? Number(options.roll) : 0,
+      lon0: centerLon,
       sampleStep: options['sample-step'] ? Number(options['sample-step']) : 3,
       pathPrecision: options['path-precision'] ? Number(options['path-precision']) : 0.35,
       outputSide: options.side ? Number(options.side) : null,

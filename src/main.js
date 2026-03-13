@@ -37,8 +37,18 @@ function createApp() {
 
         <form id="controls" class="controls">
           <label>
-            <span>lon_0</span>
-            <input id="lon0" type="number" step="0.1" value="${DEFAULT_OPTIONS.lon0}" />
+            <span>centerLon</span>
+            <input id="center-lon" type="number" step="0.1" value="${DEFAULT_OPTIONS.centerLon}" />
+          </label>
+
+          <label>
+            <span>centerLat</span>
+            <input id="center-lat" type="number" step="0.1" min="-90" max="90" value="${DEFAULT_OPTIONS.centerLat}" />
+          </label>
+
+          <label>
+            <span>roll</span>
+            <input id="roll" type="number" step="0.1" value="${DEFAULT_OPTIONS.roll}" />
           </label>
 
           <label>
@@ -148,8 +158,10 @@ function updateDownload() {
     link.href = state.outputUrl;
     link.classList.remove('disabled');
     const stem = (state.fileName || 'map').replace(/\.svg$/i, '');
-    const lon0 = document.querySelector('#lon0').value || DEFAULT_OPTIONS.lon0;
-    link.download = `${stem}_peirceq_lon${String(Math.round(Number(lon0))).padStart(3, '0')}.svg`;
+    const centerLon = document.querySelector('#center-lon').value || DEFAULT_OPTIONS.centerLon;
+    const centerLat = document.querySelector('#center-lat').value || DEFAULT_OPTIONS.centerLat;
+    const roll = document.querySelector('#roll').value || DEFAULT_OPTIONS.roll;
+    link.download = `${stem}_peirceq_lon${formatToken(centerLon)}_lat${formatToken(centerLat)}_roll${formatToken(roll)}.svg`;
   } else {
     link.removeAttribute('href');
     link.classList.add('disabled');
@@ -171,6 +183,9 @@ function updateStats() {
   stats.innerHTML = `
     <dl>
       <div><dt>入力ファイル</dt><dd>${escapeHtml(state.fileName || '(sample)')}</dd></div>
+      <div><dt>centerLon</dt><dd>${Number(state.stats.centerLon).toFixed(2)}</dd></div>
+      <div><dt>centerLat</dt><dd>${Number(state.stats.centerLat).toFixed(2)}</dd></div>
+      <div><dt>roll</dt><dd>${Number(state.stats.roll).toFixed(2)}</dd></div>
       <div><dt>変換ジオメトリ</dt><dd>${state.stats.geometryCount}</dd></div>
       <div><dt>文字要素</dt><dd>${state.stats.textCount}</dd></div>
       <div><dt>出力辺長</dt><dd>${Number(state.stats.outputSide).toFixed(3)}</dd></div>
@@ -186,6 +201,10 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
+function formatToken(value) {
+  return String(Number(value).toFixed(2)).replace(/^-/, 'm').replace('.', 'p');
+}
+
 async function runTransform() {
   if (!state.sourceSvg) {
     setStatus('先に SVG を読み込んでください。');
@@ -195,13 +214,17 @@ async function runTransform() {
   setBusy(true);
   setStatus('ベクタ変換を実行中...');
 
-  const lon0 = Number(document.querySelector('#lon0').value);
+  const centerLon = Number(document.querySelector('#center-lon').value);
+  const centerLat = Number(document.querySelector('#center-lat').value);
+  const roll = Number(document.querySelector('#roll').value);
   const sampleStep = Number(document.querySelector('#sample-step').value);
   const pathPrecision = Number(document.querySelector('#path-precision').value);
 
   try {
     const result = await transformSvgString(state.sourceSvg, {
-      lon0,
+      centerLon,
+      centerLat,
+      roll,
       sampleStep,
       pathPrecision,
     });

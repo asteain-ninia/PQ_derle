@@ -39,13 +39,18 @@ npm run transform -- "イラレ出界図.svg" "out/イラレ出界図_peirceq_lo
 主なオプション:
 
 ```bash
+--center-lon=-143
+--center-lat=0
+--roll=0
 --lon0=-143
 --sample-step=3
 --path-precision=0.35
 --side=<output-side>
 ```
 
-`--side` を省略した場合は、入力フレーム幅をそのまま出力辺長に使います。
+- `center-lon` / `center-lat` / `roll`: 最終 SVG でも sweep と同じ向きを指定できます。
+- `lon0`: 旧オプションです。`center-lon` の別名として引き続き使えます。
+- `--side` を省略した場合は、入力フレーム幅をそのまま出力辺長に使います。
 
 ## Batch Sweep
 
@@ -61,6 +66,8 @@ npm run transform -- "イラレ出界図.svg" "out/イラレ出界図_peirceq_lo
 
 この 3 自由度で、Peirce quincuncial に入る前段の向きはひとまず総当たりできます。
 `roll-mode=quarter-turn` は、正方形として同一視できる 90° 回転だけをまとめる設定です。
+評価用の sweep 画像では、経緯線・文字・境界・各種ストロークを自動で落とします。
+既定値は `output-size=320`、`source-width=3072` に上げています。
 
 ```bash
 npm run sweep -- "イラレ出界図.svg" "out/sweep"
@@ -73,8 +80,8 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 --lat-step=15
 --roll-step=15
 --roll-mode=quarter-turn
---output-size=128
---source-width=1024
+--output-size=320
+--source-width=3072
 --skip-existing=true
 --dry-run
 ```
@@ -86,6 +93,7 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 - `source-width`: 元の正距円筒フレームを何ピクセル幅でラスタ化するかです。
 - `skip-existing=true`: 既に出力済みの PNG を再生成せず、途中再開しやすくします。
 - `dry-run`: 実ファイルを作らず、生成ケース数だけ確認します。
+- sweep 出力では、評価の邪魔になる経緯線・文字・境界・ストロークを既定で含めません。
 
 出力:
 
@@ -94,10 +102,10 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 - `manifest.csv`
 - `index.html` の簡易ギャラリー
 
-注意:
+推奨フロー:
 
-- 既存のベクタ SVG 変換は現状 `lon0` のみ対応です。つまり sweep のうち、そのまま同条件で SVG 化できるのは `centerLat=0` かつ `roll=0` のケースだけです。
-- それ以外のケースは、まず低解像度 sweep で当たりを探すための用途を想定しています。
+- まず `sweep` でケースを総当たりし、`manifest.csv` や `index.html` で当たりを探します。
+- その `centerLon` / `centerLat` / `roll` を `transform` に渡して最終 SVG を作ります。
 
 ## 出力仕様
 

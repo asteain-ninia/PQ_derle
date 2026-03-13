@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Resvg } from '@resvg/resvg-js';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { PNG } from 'pngjs';
 import {
   DEFAULT_SWEEP_OPTIONS,
@@ -11,11 +11,14 @@ import {
   formatSweepCaseLabel,
   renderSweepCase,
 } from '../src/sweep-core.js';
+import { prepareSweepSourceSvg } from '../src/sweep-source-svg.js';
+
+const DEFAULT_SOURCE_WIDTH = 3072;
 
 function printUsage() {
   console.log(`Usage:
   npm run sweep -- <input.svg> <output-dir> [--lon-step=15] [--lat-step=15] [--roll-step=15]
-    [--roll-mode=quarter-turn|full-turn] [--output-size=128] [--source-width=1024]
+    [--roll-mode=quarter-turn|full-turn] [--output-size=${DEFAULT_SWEEP_OPTIONS.outputSize}] [--source-width=${DEFAULT_SOURCE_WIDTH}]
     [--lon-min=-180] [--lon-max=180] [--lat-min=-90] [--lat-max=90]
     [--skip-existing=true|false] [--html=true|false] [--limit=<count>] [--dry-run]
 `);
@@ -307,6 +310,7 @@ async function main() {
   const [inputPath, outputDir] = positional;
   const svgText = await fs.readFile(inputPath, 'utf8');
   const metadata = parseSvgMetadata(svgText);
+  const filteredSvgText = prepareSweepSourceSvg(svgText, { DOMParser, XMLSerializer });
   const sweepOptions = {
     ...DEFAULT_SWEEP_OPTIONS,
     centerLonMin: parseNumberOption(options['lon-min'], DEFAULT_SWEEP_OPTIONS.centerLonMin),
@@ -320,7 +324,7 @@ async function main() {
     outputSize: parseNumberOption(options['output-size'], DEFAULT_SWEEP_OPTIONS.outputSize),
     dedupePolarCenters: parseBoolean(options['dedupe-poles'], DEFAULT_SWEEP_OPTIONS.dedupePolarCenters),
   };
-  const sourceWidth = parseNumberOption(options['source-width'], 1024);
+  const sourceWidth = parseNumberOption(options['source-width'], DEFAULT_SOURCE_WIDTH);
   if (!(sourceWidth > 0)) {
     throw new Error('source-width must be a positive number.');
   }
@@ -349,7 +353,7 @@ async function main() {
   }
 
   await fs.mkdir(outputDir, { recursive: true });
-  const sourceImage = rasterizeSourceFrame(svgText, metadata, sourceWidth);
+  const sourceImage = rasterizeSourceFrame(filteredSvgText, metadata, sourceWidth);
   const manifestCases = [];
   const startedAt = Date.now();
   let renderedCount = 0;
@@ -399,6 +403,12 @@ async function main() {
       height: sourceImage.height,
     },
     options: enumerated.options,
+    sourceFilter: {
+      hideText: true,
+      hideGraticule: true,
+      hideBoundaries: true,
+      hideStrokes: true,
+    },
     cases: manifestCases,
   };
 

@@ -12,7 +12,7 @@ export const DEFAULT_SWEEP_OPTIONS = {
   centerLatStep: 15,
   rollStep: 15,
   rollMode: 'quarter-turn',
-  outputSize: 128,
+  outputSize: 320,
   dedupePolarCenters: true,
 };
 

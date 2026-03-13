@@ -1,4 +1,4 @@
-import { geoPath } from 'd3-geo';
+import { geoPath, geoRotation } from 'd3-geo';
 import { geoPeirceQuincuncial } from 'd3-geo-projection';
 import { SVGPathData } from 'svg-pathdata';
 
@@ -170,6 +170,21 @@ function normalizeLongitude(lon) {
   return normalized;
 }
 
+function normalizeLongitudeInclusive(lon) {
+  let normalized = lon;
+  while (normalized < -180) normalized += 360;
+  while (normalized > 180) normalized -= 360;
+  if (normalized === -0) return 0;
+  return normalized;
+}
+
+function clampLatitude(lat) {
+  if (!Number.isFinite(lat)) return 0;
+  if (lat <= -90) return -90;
+  if (lat >= 90) return 90;
+  return lat;
+}
+
 function parseOpacity(value, fallback = 1) {
   const parsed = Number.parseFloat(value ?? '');
   if (!Number.isFinite(parsed)) return fallback;
@@ -327,10 +342,54 @@ function buildProjection(side, precision) {
   return { projection, pathBuilder };
 }
 
-function sourcePointToLonLat(point, context) {
-  const lon = ((point[0] - context.frame.x) / context.frame.width) * 360 - 180 - context.lon0;
+function sourcePointToOriginalLonLat(point, context) {
+  const lon = ((point[0] - context.frame.x) / context.frame.width) * 360 - 180;
   const lat = 90 - ((point[1] - context.frame.y) / context.frame.height) * 180;
   return [lon, lat];
+}
+
+function orientLonLat(lonLat, context) {
+  const rotated = context.rotation ? context.rotation(lonLat) : lonLat;
+  if (!rotated || !Number.isFinite(rotated[0]) || !Number.isFinite(rotated[1])) {
+    return null;
+  }
+  return [
+    normalizeLongitudeInclusive(rotated[0]),
+    clampLatitude(rotated[1]),
+  ];
+}
+
+function sourcePointToLonLat(point, context) {
+  return orientLonLat(sourcePointToOriginalLonLat(point, context), context);
+}
+
+function lonLatToFramePoint(lonLat, context) {
+  const lon = normalizeLongitudeInclusive(lonLat[0]);
+  return [
+    context.frame.x + ((lon + 180) / 360) * context.frame.width,
+    context.frame.y + ((90 - clampLatitude(lonLat[1])) / 180) * context.frame.height,
+  ];
+}
+
+function framePointToLonLat(point, context) {
+  return [
+    normalizeLongitudeInclusive(((point[0] - context.frame.x) / context.frame.width) * 360 - 180),
+    clampLatitude(90 - ((point[1] - context.frame.y) / context.frame.height) * 180),
+  ];
+}
+
+function sourcePointToFramePoint(point, context) {
+  const lonLat = sourcePointToLonLat(point, context);
+  return lonLat ? lonLatToFramePoint(lonLat, context) : null;
+}
+
+function transformSubpathToFrame(subpath, context) {
+  return {
+    ...subpath,
+    points: subpath.points
+      .map((point) => sourcePointToFramePoint(point, context))
+      .filter(Boolean),
+  };
 }
 
 function distance(a, b) {
@@ -791,8 +850,7 @@ function isSouthPolarSpanningFilledSubpath(subpath, style, context) {
 }
 
 function getPolarSeamX(context) {
-  const seamLongitude = normalizeLongitude(context.lon0 - 180);
-  return context.frame.x + ((seamLongitude + 180) / 360) * context.frame.width;
+  return context.frame.x;
 }
 
 function shiftPointsAroundSeam(points, seamX, period) {
@@ -1001,15 +1059,15 @@ function splitPolylineAtLargeXJumps(points, threshold, period = null, wrapStart 
   return segments;
 }
 
-function sourceShiftedPointToLonLat(point, seamX, context) {
+function shiftedFramePointToLonLat(point, seamX, context) {
   return [
-    ((point[0] - seamX) / context.frame.width) * 360 - 180,
-    90 - ((point[1] - context.frame.y) / context.frame.height) * 180,
+    normalizeLongitudeInclusive(((point[0] - seamX) / context.frame.width) * 360 - 180),
+    clampLatitude(90 - ((point[1] - context.frame.y) / context.frame.height) * 180),
   ];
 }
 
 function projectShiftedPoint(point, seamX, context) {
-  const projected = context.projection(sourceShiftedPointToLonLat(point, seamX, context));
+  const projected = context.projection(shiftedFramePointToLonLat(point, seamX, context));
   if (!projected || !Number.isFinite(projected[0]) || !Number.isFinite(projected[1])) {
     return null;
   }
@@ -1219,9 +1277,11 @@ function buildProjectedPath(element, matrix, style, context) {
 
   for (const subpath of subpaths) {
     if (!subpath.points.length) continue;
-    const points = unwrapPeriodicX(subpath.points, context.frame.width);
-    const isSouthPolarFill = isSouthPolarSpanningFilledSubpath(subpath, style, context) && !hasVisibleStroke(style);
-    const coordinates = points.map((point) => sourcePointToLonLat(point, context));
+    const orientedSubpath = transformSubpathToFrame(subpath, context);
+    if (!orientedSubpath.points.length) continue;
+    const points = unwrapPeriodicX(orientedSubpath.points, context.frame.width);
+    const isSouthPolarFill = isSouthPolarSpanningFilledSubpath(orientedSubpath, style, context) && !hasVisibleStroke(style);
+    const coordinates = points.map((point) => framePointToLonLat(point, context));
     if (isSouthPolarFill) {
       const polarParts = buildPolarSectorProjectedPaths(points, context);
       if (polarParts.length) {
@@ -1237,9 +1297,9 @@ function buildProjectedPath(element, matrix, style, context) {
       const projected = context.pathBuilder({ type: 'LineString', coordinates: ring }) || '';
       const closedProjected = stripWorldBoundarySubpaths(closeProjectedPath(projected), context.side);
       if (closedProjected) parts.push(closedProjected);
-    } else if (shouldProjectSubpathAsArea(element, subpath, style, context)) {
+    } else if (shouldProjectSubpathAsArea(element, orientedSubpath, style, context)) {
       if (coordinates.length < 3) continue;
-      if (isPolarSpanningOpenAreaSubpath(subpath, context)) {
+      if (isPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
         parts.push(...buildPolarSectorProjectedPaths(points, context));
       } else {
         const ring = closeCoordinateRing(coordinates);
@@ -1310,7 +1370,12 @@ function replaceGeometryNode(element, matrix, style, context) {
 function transformTextNode(element, matrix, context) {
   const anchor = getTextAnchor(element);
   const sourceAnchor = applyMatrix(matrix, anchor);
-  const lonLat = sourcePointToLonLat(sourceAnchor, context);
+  const sourceLonLat = sourcePointToOriginalLonLat(sourceAnchor, context);
+  const lonLat = orientLonLat(sourceLonLat, context);
+  if (!lonLat) {
+    element.setAttribute('display', 'none');
+    return;
+  }
   const projected = context.projection(lonLat);
   if (!projected || !Number.isFinite(projected[0]) || !Number.isFinite(projected[1])) {
     element.setAttribute('display', 'none');
@@ -1323,6 +1388,8 @@ function transformTextNode(element, matrix, context) {
   element.removeAttribute('y');
   element.setAttribute('data-pq-lon', formatNumber(lonLat[0], 4));
   element.setAttribute('data-pq-lat', formatNumber(lonLat[1], 4));
+  element.setAttribute('data-pq-source-lon', formatNumber(sourceLonLat[0], 4));
+  element.setAttribute('data-pq-source-lat', formatNumber(sourceLonLat[1], 4));
   context.stats.textCount += 1;
 }
 
@@ -1344,7 +1411,11 @@ function buildCoordinateRange(start, end, step) {
 }
 
 function buildProjectedLineFromLonLat(coordinates, context) {
-  return snapPathToSquare(context.pathBuilder({ type: 'LineString', coordinates }) || '', context.side);
+  const orientedCoordinates = coordinates
+    .map((coordinate) => orientLonLat(coordinate, context))
+    .filter(Boolean);
+  if (orientedCoordinates.length < 2) return '';
+  return snapPathToSquare(context.pathBuilder({ type: 'LineString', coordinates: orientedCoordinates }) || '', context.side);
 }
 
 function replaceGraticuleGroup(group, context) {
@@ -1482,7 +1553,10 @@ function finalizeDocument(root, context) {
   root.setAttribute('height', formatNumber(context.side * context.sourceScale));
   root.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   root.setAttribute('data-pq-projection', 'peirce-quincuncial');
-  root.setAttribute('data-pq-lon0', formatNumber(context.lon0, 4));
+  root.setAttribute('data-pq-lon0', formatNumber(context.centerLon, 4));
+  root.setAttribute('data-pq-center-lon', formatNumber(context.centerLon, 4));
+  root.setAttribute('data-pq-center-lat', formatNumber(context.centerLat, 4));
+  root.setAttribute('data-pq-roll', formatNumber(context.roll, 4));
 }
 
 function createContext(document, root, options) {
@@ -1498,7 +1572,10 @@ function createContext(document, root, options) {
     stylesheet: parseStylesheet(root),
     side,
     sourceScale,
-    lon0: options.lon0,
+    centerLon: options.centerLon,
+    centerLat: options.centerLat,
+    roll: options.roll,
+    rotation: geoRotation([-options.centerLon, -options.centerLat, options.roll]),
     projection,
     pathBuilder,
     options,
@@ -1507,19 +1584,43 @@ function createContext(document, root, options) {
       textCount: 0,
       backgroundRect: false,
       outputSide: side,
+      centerLon: options.centerLon,
+      centerLat: options.centerLat,
+      roll: options.roll,
     },
   };
 }
 
 export const DEFAULT_OPTIONS = {
+  centerLon: -143,
+  centerLat: 0,
+  roll: 0,
   lon0: -143,
   sampleStep: 3,
   pathPrecision: 0.35,
   outputSide: null,
 };
 
+function normalizeTransformOptions(options = {}) {
+  const centerLon = Number.isFinite(options.centerLon)
+    ? options.centerLon
+    : Number.isFinite(options.lon0)
+      ? options.lon0
+      : DEFAULT_OPTIONS.centerLon;
+  const centerLat = Number.isFinite(options.centerLat) ? options.centerLat : DEFAULT_OPTIONS.centerLat;
+  const roll = Number.isFinite(options.roll) ? options.roll : DEFAULT_OPTIONS.roll;
+  return {
+    ...DEFAULT_OPTIONS,
+    ...options,
+    centerLon,
+    centerLat,
+    roll,
+    lon0: centerLon,
+  };
+}
+
 export async function transformSvgString(svgText, options = {}, domImpl = {}) {
-  const mergedOptions = { ...DEFAULT_OPTIONS, ...options };
+  const mergedOptions = normalizeTransformOptions(options);
   const { DOMParserImpl, XMLSerializerImpl } = getDomImpl(domImpl);
   const parser = new DOMParserImpl();
   const serializer = new XMLSerializerImpl();
