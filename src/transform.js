@@ -569,6 +569,34 @@ function dedupeSequentialPoints(points, tolerance = 1e-6) {
   return output;
 }
 
+function countDistinctPoints(points, tolerance = 1e-6) {
+  const distinct = [];
+  for (const point of points) {
+    if (!distinct.some((candidate) => pointsEqual(candidate, point, tolerance))) {
+      distinct.push(point);
+    }
+  }
+  return distinct.length;
+}
+
+function computeSignedPolygonArea(points) {
+  if (points.length < 3) return 0;
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [x1, y1] = points[index];
+    const [x2, y2] = points[(index + 1) % points.length];
+    area += x1 * y2 - x2 * y1;
+  }
+  return area / 2;
+}
+
+function hasRenderablePolygon(points, areaTolerance = 1e-4, pointTolerance = 1e-6) {
+  const deduped = dedupeSequentialPoints(points, pointTolerance);
+  if (deduped.length < 3) return false;
+  if (countDistinctPoints(deduped, pointTolerance) < 3) return false;
+  return Math.abs(computeSignedPolygonArea(deduped)) > areaTolerance;
+}
+
 function buildPathDataFromPoints(points, close = false) {
   const deduped = dedupeSequentialPoints(points);
   if (!deduped.length) return '';
@@ -1211,7 +1239,12 @@ function buildProjectedPolarWedgePath(coastline, corner, sectorEdges, minX, maxX
   snapped[0] = snapPolarEndpoint(snapped[0], firstBoundary);
   snapped[snapped.length - 1] = snapPolarEndpoint(snapped[snapped.length - 1], lastBoundary);
 
-  return buildPathDataFromPoints([...snapped, corner], true);
+  const wedgePoints = [...snapped, corner];
+  if (!hasRenderablePolygon(wedgePoints, Math.max(1e-4, context.side * context.side * 1e-12), endpointTolerance)) {
+    return '';
+  }
+
+  return buildPathDataFromPoints(wedgePoints, true);
 }
 
 function buildPolarSectorProjectedPaths(points, context) {
@@ -1273,7 +1306,7 @@ function shouldProjectSubpathAsArea(element, subpath, style, context) {
 function buildProjectedPath(element, matrix, style, context) {
   const subpaths = sampleGeometry(element, matrix, context.options);
   const parts = [];
-  let forceSplit = false;
+  let fillRuleOverride = null;
 
   for (const subpath of subpaths) {
     if (!subpath.points.length) continue;
@@ -1286,7 +1319,9 @@ function buildProjectedPath(element, matrix, style, context) {
       const polarParts = buildPolarSectorProjectedPaths(points, context);
       if (polarParts.length) {
         parts.push(...polarParts);
-        forceSplit ||= polarParts.length > 1;
+        if (polarParts.length > 1) {
+          fillRuleOverride = 'evenodd';
+        }
         continue;
       }
     }
@@ -1300,7 +1335,11 @@ function buildProjectedPath(element, matrix, style, context) {
     } else if (shouldProjectSubpathAsArea(element, orientedSubpath, style, context)) {
       if (coordinates.length < 3) continue;
       if (isPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
-        parts.push(...buildPolarSectorProjectedPaths(points, context));
+        const polarParts = buildPolarSectorProjectedPaths(points, context);
+        parts.push(...polarParts);
+        if (polarParts.length > 1) {
+          fillRuleOverride = 'evenodd';
+        }
       } else {
         const ring = closeCoordinateRing(coordinates);
         const projected = context.pathBuilder({ type: 'Polygon', coordinates: [ring] }) || '';
@@ -1313,7 +1352,7 @@ function buildProjectedPath(element, matrix, style, context) {
     }
   }
 
-  return { parts, forceSplit };
+  return { parts, fillRuleOverride };
 }
 
 function replaceGeometryNode(element, matrix, style, context) {
@@ -1330,36 +1369,13 @@ function replaceGeometryNode(element, matrix, style, context) {
     return;
   }
 
-  const { parts, forceSplit } = buildProjectedPath(element, matrix, style, context);
-
-  if (forceSplit && parts.length > 1) {
-    const group = context.document.createElementNS(SVG_NS, 'g');
-    const id = element.getAttribute('id');
-    const dataName = element.getAttribute('data-name');
-    if (id) group.setAttribute('id', id);
-    if (dataName) group.setAttribute('data-name', dataName);
-    group.setAttribute('data-pq-split', '1');
-
-    const childSkip = new Set([...GEOMETRY_ATTRIBUTES, 'id', 'data-name']);
-    for (let index = 0; index < parts.length; index += 1) {
-      const pathElement = context.document.createElementNS(SVG_NS, 'path');
-      copyAttributes(element, pathElement, childSkip);
-      pathElement.setAttribute('d', parts[index] || '');
-      pathElement.setAttribute('data-pq-split-index', String(index));
-      if (localName(element) !== 'path') {
-        pathElement.setAttribute('data-pq-source-tag', localName(element));
-      }
-      group.appendChild(pathElement);
-    }
-
-    replaceNode(element, group);
-    context.stats.geometryCount += parts.length;
-    return;
-  }
-
+  const { parts, fillRuleOverride } = buildProjectedPath(element, matrix, style, context);
   const pathElement = context.document.createElementNS(SVG_NS, 'path');
   copyAttributes(element, pathElement, GEOMETRY_ATTRIBUTES);
   pathElement.setAttribute('d', parts.join('') || '');
+  if (fillRuleOverride) {
+    pathElement.setAttribute('fill-rule', fillRuleOverride);
+  }
   if (localName(element) !== 'path') {
     pathElement.setAttribute('data-pq-source-tag', localName(element));
   }

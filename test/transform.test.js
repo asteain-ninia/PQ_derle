@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { geoPeirceQuincuncial } from 'd3-geo-projection';
 import { geoRotation } from 'd3-geo';
@@ -108,4 +109,22 @@ test('transformSvgString keeps lon0 as a centerLon alias', async () => {
     parseTranslate(legacyText.getAttribute('transform')),
     projection([0, 0]),
   );
+});
+
+test('transformSvgString merges south-polar split fills into a single evenodd path', async () => {
+  const sampleSvg = await readFile(new URL('../イラレ出界図.svg', import.meta.url), 'utf8');
+  const result = await transformSvgString(
+    sampleSvg,
+    {
+      outputSide: 720,
+    },
+    { DOMParser, XMLSerializer },
+  );
+
+  assert.equal(result.svgText.includes('data-pq-split='), false);
+
+  const document = parseDocument(result.svgText);
+  const evenoddPaths = Array.from(document.getElementsByTagName('path'))
+    .filter((node) => node.getAttribute('fill-rule') === 'evenodd');
+  assert.ok(evenoddPaths.length >= 1);
 });
