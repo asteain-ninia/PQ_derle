@@ -7,15 +7,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "transform": "node scripts/transform-svg.mjs"
+    "transform": "node scripts/transform-svg.mjs",
+    "sweep": "node scripts/sweep-peirce.mjs",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@xmldom/xmldom": "^0.8.11",
     "d3-geo": "^3.1.1",
     "d3-geo-projection": "^4.0.0",
+    "pngjs": "^7.0.0",
     "svg-pathdata": "^6.0.3"
   },
   "devDependencies": {

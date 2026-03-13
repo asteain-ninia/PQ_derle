@@ -47,6 +47,58 @@ npm run transform -- "イラレ出界図.svg" "out/イラレ出界図_peirceq_lo
 
 `--side` を省略した場合は、入力フレーム幅をそのまま出力辺長に使います。
 
+## Batch Sweep
+
+低解像度 PNG で大量の向きを試すための総当たりモードを追加しました。
+これは既存のベクタ変換とは別系統で、元 SVG を一度だけラスタ化し、
+球面回転を変えながら Peirce quincuncial を直接 PNG に描きます。
+
+走査しているパラメーターは次の 3 つです。
+
+- `centerLon`: 球面上で正方形中央へ寄せる経度
+- `centerLat`: 球面上で正方形中央へ寄せる緯度
+- `roll`: その向きのまま正方形を何度回すか
+
+この 3 自由度で、Peirce quincuncial に入る前段の向きはひとまず総当たりできます。
+`roll-mode=quarter-turn` は、正方形として同一視できる 90° 回転だけをまとめる設定です。
+
+```bash
+npm run sweep -- "イラレ出界図.svg" "out/sweep"
+```
+
+主なオプション:
+
+```bash
+--lon-step=15
+--lat-step=15
+--roll-step=15
+--roll-mode=quarter-turn
+--output-size=128
+--source-width=1024
+--skip-existing=true
+--dry-run
+```
+
+- `lon-step` / `lat-step` / `roll-step`: 総当たりの刻み幅です。
+- `roll-mode=quarter-turn`: 正方形の 90° 回転同値をまとめ、roll を 0〜90° 未満だけ走査します。
+- `roll-mode=full-turn`: 同値圧縮せず 0〜360° 未満を走査します。
+- `output-size`: 各ケース PNG の一辺ピクセル数です。低くするほどケース数を優先できます。
+- `source-width`: 元の正距円筒フレームを何ピクセル幅でラスタ化するかです。
+- `skip-existing=true`: 既に出力済みの PNG を再生成せず、途中再開しやすくします。
+- `dry-run`: 実ファイルを作らず、生成ケース数だけ確認します。
+
+出力:
+
+- 各ケースの PNG
+- `manifest.json`
+- `manifest.csv`
+- `index.html` の簡易ギャラリー
+
+注意:
+
+- 既存のベクタ SVG 変換は現状 `lon0` のみ対応です。つまり sweep のうち、そのまま同条件で SVG 化できるのは `centerLat=0` かつ `roll=0` のケースだけです。
+- それ以外のケースは、まず低解像度 sweep で当たりを探すための用途を想定しています。
+
 ## 出力仕様
 
 - 地図の塗りと線は SVG パスです。
