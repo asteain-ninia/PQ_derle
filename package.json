@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "transform": "node scripts/transform-svg.mjs",
     "sweep": "node scripts/sweep-peirce.mjs",
+    "rank-sweep": "node scripts/generate-sweep-ranking-manifest.mjs",
     "test": "node --test"
   },
   "keywords": [],

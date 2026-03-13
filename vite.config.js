@@ -7,6 +7,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         sweepViewer: resolve(__dirname, 'sweep-viewer.html'),
+        sweepRanking: resolve(__dirname, 'sweep-ranking.html'),
       },
     },
   },

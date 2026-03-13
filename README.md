@@ -30,6 +30,11 @@ npm run dev
 
 表示された画面に SVG をドラッグするか、`同梱サンプルを使う` を押してください。
 
+追加アプリ:
+
+- `/sweep-viewer.html`: `out/sweep-full-defaults` を読む downstream viewer
+- `/sweep-ranking.html`: `out/sweep-full-defaults/ranking-manifest.json` を読む歪みランキング viewer
+
 ## CLI
 
 ```bash
@@ -106,6 +111,29 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 
 - まず `sweep` でケースを総当たりし、`manifest.csv` や `index.html` で当たりを探します。
 - その `centerLon` / `centerLat` / `roll` を `transform` に渡して最終 SVG を作ります。
+
+## Distortion Ranking
+
+`out/sweep-full-defaults` を downstream 解析し、Peirce quincuncial 上で
+陸地が高歪み帯にどれだけ乗るかをランキング表示する別アプリです。
+
+まず ranking manifest を生成します。
+
+```bash
+npm run rank-sweep
+```
+
+既定では `out/sweep-full-defaults/manifest.json` を読み、
+`out/sweep-full-defaults/ranking-manifest.json` を出力します。
+
+その後、`npm run dev` のままブラウザで `http://localhost:5173/sweep-ranking.html` を開きます。
+
+実装上の歪み指標:
+
+- `Geo Mean`: 地表面積補正つき平均歪み
+- `Visual Mean`: 投影後の見た目ベース平均歪み
+- `P95`: 陸地上位 5% の歪み強度
+- `Hotspot %`: 高歪み帯に入る陸地の面積比率
 
 ## 出力仕様
 
