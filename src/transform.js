@@ -523,30 +523,6 @@ function snapEdgeCoordinate(value, side, tolerance) {
   return value;
 }
 
-function snapPathToSquare(pathData, side, tolerance = 0.05) {
-  if (!pathData) return pathData;
-  let changed = false;
-  const commands = new SVGPathData(pathData).toAbs().commands.map((command) => {
-    const next = { ...command };
-    for (const key of ['x', 'x1', 'x2']) {
-      if (Number.isFinite(next[key])) {
-        const snapped = snapEdgeCoordinate(next[key], side, tolerance);
-        changed ||= snapped !== next[key];
-        next[key] = snapped;
-      }
-    }
-    for (const key of ['y', 'y1', 'y2']) {
-      if (Number.isFinite(next[key])) {
-        const snapped = snapEdgeCoordinate(next[key], side, tolerance);
-        changed ||= snapped !== next[key];
-        next[key] = snapped;
-      }
-    }
-    return next;
-  });
-  return changed ? new SVGPathData(commands).encode() : pathData;
-}
-
 function snapPointToSquare(point, side, tolerance = 0.05) {
   return [
     snapEdgeCoordinate(point[0], side, tolerance),
@@ -606,6 +582,309 @@ function buildPathDataFromPoints(points, close = false) {
   }
   if (close) pathData += 'Z';
   return pathData;
+}
+
+function distanceToSquareBoundary(point, side) {
+  return Math.min(
+    Math.abs(point[0]),
+    Math.abs(point[0] - side),
+    Math.abs(point[1]),
+    Math.abs(point[1] - side),
+  );
+}
+
+function getBoundaryEdgesForPoint(point, side, tolerance = 0.5) {
+  const edges = [];
+  if (Math.abs(point[0]) <= tolerance) edges.push('left');
+  if (Math.abs(point[0] - side) <= tolerance) edges.push('right');
+  if (Math.abs(point[1]) <= tolerance) edges.push('top');
+  if (Math.abs(point[1] - side) <= tolerance) edges.push('bottom');
+  return edges;
+}
+
+function shouldSplitProjectedOpenJump(start, end, side, boundaryTolerance = 0.5) {
+  const jumpThreshold = Math.max(24, side * 0.05);
+  if (distance(start, end) < jumpThreshold) return false;
+  if (distanceToSquareBoundary(start, side) > boundaryTolerance) return false;
+  if (distanceToSquareBoundary(end, side) > boundaryTolerance) return false;
+
+  const startEdges = getBoundaryEdgesForPoint(start, side, boundaryTolerance);
+  const endEdges = getBoundaryEdgesForPoint(end, side, boundaryTolerance);
+  return startEdges.some((edge) => endEdges.includes(edge));
+}
+
+function normalizeProjectedOpenPath(pathData, side, boundaryTolerance = 0.5, endpointSnapTolerance = 0.5) {
+  if (!pathData) return '';
+  const commands = new SVGPathData(pathData).toAbs().commands;
+  const parts = [];
+  let current = [];
+
+  const flushCurrent = () => {
+    if (current.length < 2) {
+      current = [];
+      return;
+    }
+    const normalized = current.map((point, index) => {
+      if (index === 0 || index === current.length - 1) {
+        return snapPointToSquare(point, side, endpointSnapTolerance);
+      }
+      return point;
+    });
+    const part = buildPathDataFromPoints(normalized, false);
+    if (part) parts.push(part);
+    current = [];
+  };
+
+  for (const command of commands) {
+    if (command.type === SVGPathData.MOVE_TO) {
+      flushCurrent();
+      current = [[command.x, command.y]];
+      continue;
+    }
+    if (command.type !== SVGPathData.LINE_TO || !Number.isFinite(command.x) || !Number.isFinite(command.y)) {
+      continue;
+    }
+
+    const point = [command.x, command.y];
+    const previous = current[current.length - 1];
+    if (!previous) {
+      current = [point];
+      continue;
+    }
+
+    if (shouldSplitProjectedOpenJump(previous, point, side, boundaryTolerance)) {
+      current[current.length - 1] = snapPointToSquare(previous, side, endpointSnapTolerance);
+      flushCurrent();
+      current = [snapPointToSquare(point, side, endpointSnapTolerance)];
+      continue;
+    }
+
+    current.push(point);
+  }
+
+  flushCurrent();
+  return parts.join('');
+}
+
+function buildProjectedOpenLinePath(coordinates, context) {
+  if (coordinates.length < 2) return '';
+  const projected = context.pathBuilder({ type: 'LineString', coordinates }) || '';
+  return normalizeProjectedOpenPath(projected, context.side);
+}
+
+function parseProjectedPathSubpaths(pathData) {
+  if (!pathData) return [];
+  const commands = new SVGPathData(pathData).toAbs().commands;
+  const subpaths = [];
+  let current = null;
+
+  for (const command of commands) {
+    if (command.type === SVGPathData.MOVE_TO) {
+      current = {
+        points: [[command.x, command.y]],
+        closed: false,
+      };
+      subpaths.push(current);
+      continue;
+    }
+    if (!current) continue;
+    if (command.type === SVGPathData.LINE_TO && Number.isFinite(command.x) && Number.isFinite(command.y)) {
+      current.points.push([command.x, command.y]);
+    } else if (command.type === SVGPathData.CLOSE_PATH) {
+      current.closed = true;
+    }
+  }
+
+  return subpaths;
+}
+
+function explodePathDataToAtomicParts(pathData) {
+  const subpaths = parseProjectedPathSubpaths(pathData);
+  if (!subpaths.length) return pathData ? [pathData] : [];
+  return subpaths
+    .map((subpath) => buildPathDataFromPoints(subpath.points, subpath.closed))
+    .filter(Boolean);
+}
+
+function getBoundaryPerimeterPositions(point, side, tolerance = 0.5) {
+  const snapped = snapPointToSquare(point, side, tolerance);
+  const perimeter = side * 4;
+  const positions = [];
+
+  if (Math.abs(snapped[1]) <= tolerance) positions.push(snapped[0]);
+  if (Math.abs(snapped[0] - side) <= tolerance) positions.push(side + snapped[1]);
+  if (Math.abs(snapped[1] - side) <= tolerance) positions.push((side * 3) - snapped[0]);
+  if (Math.abs(snapped[0]) <= tolerance) positions.push(perimeter - snapped[1]);
+
+  return [...new Set(positions.map((value) => (Math.abs(value - perimeter) <= tolerance ? 0 : value)))];
+}
+
+function getSquareBoundaryCorner(position, side) {
+  const perimeter = side * 4;
+  const normalized = ((position % perimeter) + perimeter) % perimeter;
+  const tolerance = Math.max(1e-6, side * 1e-9);
+  if (Math.abs(normalized) <= tolerance) return [0, 0];
+  if (Math.abs(normalized - side) <= tolerance) return [side, 0];
+  if (Math.abs(normalized - (side * 2)) <= tolerance) return [side, side];
+  if (Math.abs(normalized - (side * 3)) <= tolerance) return [0, side];
+  return null;
+}
+
+function buildShortestSquareBoundaryPath(fromPoint, toPoint, side, tolerance = 0.5) {
+  const from = snapPointToSquare(fromPoint, side, tolerance);
+  const to = snapPointToSquare(toPoint, side, tolerance);
+  const perimeter = side * 4;
+  const fromPositions = getBoundaryPerimeterPositions(from, side, tolerance);
+  const toPositions = getBoundaryPerimeterPositions(to, side, tolerance);
+  if (!fromPositions.length || !toPositions.length) return [from, to];
+
+  let best = null;
+  for (const fromPosition of fromPositions) {
+    for (const toPosition of toPositions) {
+      const clockwise = (toPosition - fromPosition + perimeter) % perimeter;
+      const counterClockwise = (fromPosition - toPosition + perimeter) % perimeter;
+      const direction = clockwise <= counterClockwise ? 'cw' : 'ccw';
+      const routeLength = Math.min(clockwise, counterClockwise);
+      if (!best || routeLength < best.routeLength) {
+        best = { fromPosition, toPosition, direction, routeLength };
+      }
+    }
+  }
+
+  const corners = [];
+  const cornerPositions = [0, side, side * 2, side * 3, side * 4];
+  if (best.direction === 'cw') {
+    for (const cornerPosition of cornerPositions) {
+      const delta = (cornerPosition - best.fromPosition + perimeter) % perimeter;
+      if (delta > tolerance && delta < best.routeLength - tolerance) {
+        const corner = getSquareBoundaryCorner(cornerPosition, side);
+        if (corner) corners.push(corner);
+      }
+    }
+  } else {
+    for (const cornerPosition of [...cornerPositions].reverse()) {
+      const delta = (best.fromPosition - cornerPosition + perimeter) % perimeter;
+      if (delta > tolerance && delta < best.routeLength - tolerance) {
+        const corner = getSquareBoundaryCorner(cornerPosition, side);
+        if (corner) corners.push(corner);
+      }
+    }
+  }
+
+  return dedupeSequentialPoints([from, ...corners, to], tolerance);
+}
+
+function buildProjectedAreaPartPath(points, side, expectedAreaSign, endpointSnapTolerance = 0.5) {
+  const segment = dedupeSequentialPoints(
+    points.map((point, index) => (
+      index === 0 || index === points.length - 1
+        ? snapPointToSquare(point, side, endpointSnapTolerance)
+        : point
+    )),
+    endpointSnapTolerance,
+  );
+  if (segment.length < 2) return '';
+
+  const boundaryPath = buildShortestSquareBoundaryPath(
+    segment[segment.length - 1],
+    segment[0],
+    side,
+    endpointSnapTolerance,
+  );
+  const polygonPoints = [...segment, ...boundaryPath.slice(1, -1)];
+  if (!hasRenderablePolygon(
+    polygonPoints,
+    Math.max(1e-4, side * side * 1e-12),
+    endpointSnapTolerance,
+  )) {
+    return '';
+  }
+
+  const polygonAreaSign = Math.sign(computeSignedPolygonArea(polygonPoints));
+  const finalPoints = expectedAreaSign && polygonAreaSign && polygonAreaSign !== expectedAreaSign
+    ? [...polygonPoints].reverse()
+    : polygonPoints;
+  return buildPathDataFromPoints(finalPoints, true);
+}
+
+function normalizeProjectedAreaSubpath(points, side, boundaryTolerance = 0.5, endpointSnapTolerance = 0.5) {
+  const ring = dedupeSequentialPoints(
+    points.map((point) => snapPointToSquare(point, side, endpointSnapTolerance)),
+    endpointSnapTolerance,
+  );
+  if (ring.length < 3) return '';
+
+  const baseRing = pointsEqual(ring[0], ring[ring.length - 1], endpointSnapTolerance)
+    ? ring.slice(0, -1)
+    : ring;
+  if (baseRing.length < 3) return '';
+
+  const closedRing = [...baseRing, baseRing[0]];
+  const splitSegmentIndexes = [];
+  for (let index = 0; index < closedRing.length - 1; index += 1) {
+    if (shouldSplitProjectedOpenJump(closedRing[index], closedRing[index + 1], side, boundaryTolerance)) {
+      splitSegmentIndexes.push(index);
+    }
+  }
+
+  const expectedAreaSign = Math.sign(computeSignedPolygonArea(baseRing));
+  if (!splitSegmentIndexes.length) {
+    return buildProjectedAreaPartPath(baseRing, side, expectedAreaSign, endpointSnapTolerance);
+  }
+
+  const parts = [];
+  const splitSegmentSet = new Set(splitSegmentIndexes);
+  const segmentCount = closedRing.length - 1;
+  const startIndex = (splitSegmentIndexes[0] + 1) % segmentCount;
+  let current = [closedRing[startIndex]];
+
+  const flushCurrent = () => {
+    const part = buildProjectedAreaPartPath(current, side, expectedAreaSign, endpointSnapTolerance);
+    if (part) parts.push(part);
+  };
+
+  for (let offset = 0; offset < segmentCount; offset += 1) {
+    const segmentIndex = (startIndex + offset) % segmentCount;
+    const endPoint = closedRing[(segmentIndex + 1) % segmentCount];
+    if (splitSegmentSet.has(segmentIndex)) {
+      flushCurrent();
+      current = [endPoint];
+      continue;
+    }
+
+    current.push(endPoint);
+  }
+
+  flushCurrent();
+  return parts.join('');
+}
+
+function normalizeProjectedAreaPath(pathData, side, boundaryTolerance = 0.5, endpointSnapTolerance = 0.5) {
+  if (!pathData) return '';
+  const parts = [];
+
+  for (const subpath of parseProjectedPathSubpaths(pathData)) {
+    if (subpath.closed) {
+      const normalized = normalizeProjectedAreaSubpath(
+        subpath.points,
+        side,
+        boundaryTolerance,
+        endpointSnapTolerance,
+      );
+      if (normalized) parts.push(normalized);
+      continue;
+    }
+
+    const openPath = buildPathDataFromPoints(subpath.points, false);
+    if (openPath) parts.push(openPath);
+  }
+
+  return parts.join('');
+}
+
+function normalizeProjectedFilledAreaPath(pathData, context) {
+  const normalized = normalizeProjectedAreaPath(pathData, context.side);
+  return stripWorldBoundarySubpaths(normalized, context.side);
 }
 
 function parsePoints(pointsValue) {
@@ -817,6 +1096,22 @@ function replaceNode(node, replacement) {
   const parent = node.parentNode;
   if (!parent) return;
   parent.replaceChild(replacement, node);
+}
+
+function replaceNodeWithMany(node, replacements) {
+  if (!replacements.length) return;
+  if (replacements.length === 1) {
+    replaceNode(node, replacements[0]);
+    return;
+  }
+
+  const parent = node.parentNode;
+  if (!parent) return;
+  const nextSibling = node.nextSibling;
+  for (const replacement of replacements) {
+    parent.insertBefore(replacement, nextSibling);
+  }
+  parent.removeChild(node);
 }
 
 function findDirectChildByLocalName(node, name) {
@@ -1313,6 +1608,7 @@ function buildProjectedPath(element, matrix, style, context) {
   const subpaths = sampleGeometry(element, matrix, context.options);
   const parts = [];
   let fillRuleOverride = null;
+  const isFillOnlyArea = hasVisibleFill(style) && !hasVisibleStroke(style);
 
   for (const subpath of subpaths) {
     if (!subpath.points.length) continue;
@@ -1324,7 +1620,7 @@ function buildProjectedPath(element, matrix, style, context) {
     if (isSouthPolarFill) {
       const polarParts = buildPolarSectorProjectedPaths(points, context);
       if (polarParts.length) {
-        parts.push(...polarParts);
+        parts.push(...polarParts.map((pathData) => normalizeProjectedFilledAreaPath(pathData, context)).filter(Boolean));
         if (polarParts.length > 1) {
           fillRuleOverride = 'evenodd';
         }
@@ -1336,24 +1632,29 @@ function buildProjectedPath(element, matrix, style, context) {
       if (coordinates.length < 3) continue;
       const ring = closeCoordinateRing(coordinates);
       const projected = context.pathBuilder({ type: 'LineString', coordinates: ring }) || '';
-      const closedProjected = stripWorldBoundarySubpaths(closeProjectedPath(projected), context.side);
+      let closedProjected = closeProjectedPath(projected);
+      if (isFillOnlyArea) {
+        closedProjected = normalizeProjectedFilledAreaPath(closedProjected, context);
+      } else {
+        closedProjected = stripWorldBoundarySubpaths(closedProjected, context.side);
+      }
       if (closedProjected) parts.push(closedProjected);
     } else if (shouldProjectSubpathAsArea(element, orientedSubpath, style, context)) {
       if (coordinates.length < 3) continue;
       if (isSouthPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
         const polarParts = buildPolarSectorProjectedPaths(points, context);
-        parts.push(...polarParts);
+        parts.push(...polarParts.map((pathData) => normalizeProjectedFilledAreaPath(pathData, context)).filter(Boolean));
         if (polarParts.length > 1) {
           fillRuleOverride = 'evenodd';
         }
       } else {
         const ring = closeCoordinateRing(coordinates);
         const projected = context.pathBuilder({ type: 'Polygon', coordinates: [ring] }) || '';
-        const stripped = stripWorldBoundarySubpaths(projected, context.side);
+        const stripped = normalizeProjectedFilledAreaPath(projected, context);
         if (stripped) parts.push(stripped);
       }
     } else if (coordinates.length >= 2) {
-      const projected = context.pathBuilder({ type: 'LineString', coordinates }) || '';
+      const projected = buildProjectedOpenLinePath(coordinates, context);
       if (projected) parts.push(projected);
     }
   }
@@ -1376,17 +1677,28 @@ function replaceGeometryNode(element, matrix, style, context) {
   }
 
   const { parts, fillRuleOverride } = buildProjectedPath(element, matrix, style, context);
-  const pathElement = context.document.createElementNS(SVG_NS, 'path');
-  copyAttributes(element, pathElement, GEOMETRY_ATTRIBUTES);
-  pathElement.setAttribute('d', parts.join('') || '');
-  if (fillRuleOverride) {
-    pathElement.setAttribute('fill-rule', fillRuleOverride);
-  }
-  if (localName(element) !== 'path') {
-    pathElement.setAttribute('data-pq-source-tag', localName(element));
-  }
-  replaceNode(element, pathElement);
-  context.stats.geometryCount += 1;
+  const atomicParts = parts.flatMap((part) => explodePathDataToAtomicParts(part));
+  const outputParts = atomicParts.length ? atomicParts : [''];
+  const replacements = outputParts.map((pathData, index) => {
+    const pathElement = context.document.createElementNS(SVG_NS, 'path');
+    const skip = new Set(GEOMETRY_ATTRIBUTES);
+    if (index > 0) skip.add('id');
+    copyAttributes(element, pathElement, skip);
+    pathElement.setAttribute('d', pathData);
+    if (fillRuleOverride && outputParts.length === 1) {
+      pathElement.setAttribute('fill-rule', fillRuleOverride);
+    }
+    if (outputParts.length > 1) {
+      pathElement.setAttribute('data-pq-fragment', `${index + 1}/${outputParts.length}`);
+    }
+    if (localName(element) !== 'path') {
+      pathElement.setAttribute('data-pq-source-tag', localName(element));
+    }
+    return pathElement;
+  });
+
+  replaceNodeWithMany(element, replacements);
+  context.stats.geometryCount += replacements.length;
 }
 
 function transformTextNode(element, matrix, context) {
@@ -1437,7 +1749,7 @@ function buildProjectedLineFromLonLat(coordinates, context) {
     .map((coordinate) => orientLonLat(coordinate, context))
     .filter(Boolean);
   if (orientedCoordinates.length < 2) return '';
-  return snapPathToSquare(context.pathBuilder({ type: 'LineString', coordinates: orientedCoordinates }) || '', context.side);
+  return buildProjectedOpenLinePath(orientedCoordinates, context);
 }
 
 function replaceGraticuleGroup(group, context) {
@@ -1448,15 +1760,6 @@ function replaceGraticuleGroup(group, context) {
   const grid30 = context.document.createElementNS(SVG_NS, 'g');
   grid30.setAttribute('id', '_30_');
   grid30.setAttribute('data-name', '30°');
-
-  const border = context.document.createElementNS(SVG_NS, 'rect');
-  border.setAttribute('class', 'cls-26');
-  border.setAttribute('x', '0');
-  border.setAttribute('y', '0');
-  border.setAttribute('width', formatNumber(context.side));
-  border.setAttribute('height', formatNumber(context.side));
-  border.setAttribute('data-pq-generated', 'graticule-frame');
-  grid30.appendChild(border);
 
   for (const latitude of GENERATED_GRATICULE_LATITUDES) {
     const path = context.document.createElementNS(SVG_NS, 'path');
