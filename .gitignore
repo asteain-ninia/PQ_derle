@@ -23,3 +23,7 @@ Thumbs.db
 dist/
 build/
 out/sweep*/
+
+# Python caches
+__pycache__/
+*.pyc
