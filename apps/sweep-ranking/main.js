@@ -14,7 +14,10 @@ const DEFAULT_MANIFEST_PATHS = [
 ];
 
 const DEFAULT_VISIBLE_COUNT = 100;
+const VIEW_LIST = 'list';
+const VIEW_DETAIL = 'detail';
 const state = {
+  view: VIEW_LIST,
   manifest: null,
   manifestUrl: null,
   field: null,
@@ -151,7 +154,27 @@ function createApp() {
         </aside>
 
         <section class="sra-main">
-          <article class="sra-panel sra-table-panel">
+          <nav class="sra-viewbar sra-panel" aria-label="表示切替">
+            <div class="sra-tabs" role="tablist">
+              <button class="sra-tab" id="tab-list" type="button" role="tab" data-view="${VIEW_LIST}" aria-controls="ranking-panel">
+                ランキング <span class="sra-tab-sub" id="tab-list-sub"></span>
+              </button>
+              <button class="sra-tab" id="tab-detail" type="button" role="tab" data-view="${VIEW_DETAIL}" aria-controls="detail-panel">
+                詳細 <span class="sra-tab-sub" id="tab-detail-sub"></span>
+              </button>
+            </div>
+            <div class="sra-stepper">
+              <button class="sra-step-button" id="prev-case" type="button" title="前の順位 (← / k)">← 前</button>
+              <span class="sra-step-position" id="rank-position">-</span>
+              <button class="sra-step-button" id="next-case" type="button" title="次の順位 (→ / j)">次 →</button>
+            </div>
+            <p class="sra-key-hint">
+              <kbd>←</kbd><kbd>→</kbd> / <kbd>k</kbd><kbd>j</kbd> 順位移動
+              · <kbd>Enter</kbd> 詳細 · <kbd>Esc</kbd> 一覧
+            </p>
+          </nav>
+
+          <article class="sra-panel sra-table-panel" id="ranking-panel" role="tabpanel" aria-labelledby="tab-list">
             <div class="sra-panel-head">
               <div>
                 <p class="sra-section-label">Ranking</p>
@@ -177,7 +200,7 @@ function createApp() {
             </div>
           </article>
 
-          <article class="sra-panel sra-detail-panel">
+          <article class="sra-panel sra-detail-panel" id="detail-panel" role="tabpanel" aria-labelledby="tab-detail" hidden>
             <div class="sra-panel-head">
               <div>
                 <p class="sra-section-label">Detail</p>
@@ -223,6 +246,16 @@ function createApp() {
   refs.detailMaskOverlay = app.querySelector('#detail-mask-overlay');
   refs.detailHighlightImage = app.querySelector('#detail-highlight-image');
   refs.detailHighlightOverlay = app.querySelector('#detail-highlight-overlay');
+  refs.main = app.querySelector('.sra-main');
+  refs.rankingPanel = app.querySelector('#ranking-panel');
+  refs.detailPanel = app.querySelector('#detail-panel');
+  refs.tabList = app.querySelector('#tab-list');
+  refs.tabDetail = app.querySelector('#tab-detail');
+  refs.tabListSub = app.querySelector('#tab-list-sub');
+  refs.tabDetailSub = app.querySelector('#tab-detail-sub');
+  refs.prevCase = app.querySelector('#prev-case');
+  refs.nextCase = app.querySelector('#next-case');
+  refs.rankPosition = app.querySelector('#rank-position');
 }
 
 function getInitialManifestUrls() {
@@ -352,6 +385,100 @@ function renderRanking() {
       `)
       .join('')
     : '<tr><td colspan="7">filter に一致するケースがありません。</td></tr>';
+  refs.tabListSub.textContent = `${visibleCases.length} 件`;
+  updateNavigation();
+}
+
+function getSelectedVisibleIndex(visibleCases = getVisibleCases()) {
+  return visibleCases.findIndex((entry) => entry.caseId === state.selectedCaseId);
+}
+
+function updateNavigation() {
+  const visibleCases = getVisibleCases();
+  const index = getSelectedVisibleIndex(visibleCases);
+  const selected = index >= 0 ? visibleCases[index] : null;
+  refs.rankPosition.textContent = selected ? `#${index + 1} / ${visibleCases.length}` : '-';
+  refs.prevCase.disabled = index <= 0;
+  refs.nextCase.disabled = index < 0 || index >= visibleCases.length - 1;
+  refs.tabDetailSub.textContent = selected ? `#${index + 1} ${selected.label}` : '';
+}
+
+function syncLocation() {
+  // manifest 読込前は URL の case / view を初期値として残しておく。
+  if (!state.manifest) return;
+  const url = new URL(window.location.href);
+  if (state.selectedCaseId === null) {
+    url.searchParams.delete('case');
+  } else {
+    url.searchParams.set('case', String(state.selectedCaseId));
+  }
+  if (state.view === VIEW_DETAIL) {
+    url.searchParams.set('view', VIEW_DETAIL);
+  } else {
+    url.searchParams.delete('view');
+  }
+  history.replaceState(history.state, '', url);
+}
+
+function setView(view, { focus = false } = {}) {
+  state.view = view === VIEW_DETAIL ? VIEW_DETAIL : VIEW_LIST;
+  const isDetail = state.view === VIEW_DETAIL;
+  refs.rankingPanel.hidden = isDetail;
+  refs.detailPanel.hidden = !isDetail;
+  for (const [tab, active] of [[refs.tabList, !isDetail], [refs.tabDetail, isDetail]]) {
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  document.body.dataset.view = state.view;
+  if (!isDetail) {
+    scrollSelectedRowIntoView();
+  }
+  if (focus) {
+    (isDetail ? refs.tabDetail : refs.tabList).focus({ preventScroll: true });
+  }
+  // 下までスクロールした状態で切り替えても、切替バーの直下から見えるようにする。
+  const mainTop = refs.main.getBoundingClientRect().top + window.scrollY;
+  if (window.scrollY > mainTop) {
+    window.scrollTo({ top: mainTop });
+  }
+  syncLocation();
+}
+
+function scrollSelectedRowIntoView() {
+  const row = refs.rankingBody.querySelector('tr.is-selected');
+  if (!row) return;
+  const wrap = row.closest('.sra-table-wrap');
+  if (!wrap) return;
+  const head = wrap.querySelector('thead');
+  const headHeight = head ? head.offsetHeight : 0;
+  const rowTop = row.offsetTop;
+  const rowBottom = rowTop + row.offsetHeight;
+  if (rowTop - headHeight < wrap.scrollTop) {
+    wrap.scrollTop = rowTop - headHeight;
+  } else if (rowBottom > wrap.scrollTop + wrap.clientHeight) {
+    wrap.scrollTop = rowBottom - wrap.clientHeight;
+  }
+}
+
+function selectCase(caseId) {
+  if (caseId === state.selectedCaseId) return;
+  state.selectedCaseId = caseId;
+  for (const row of refs.rankingBody.querySelectorAll('tr[data-case-id]')) {
+    row.classList.toggle('is-selected', Number(row.dataset.caseId) === caseId);
+  }
+  scrollSelectedRowIntoView();
+  updateNavigation();
+  syncLocation();
+  renderSelectedCase();
+}
+
+function stepSelection(delta) {
+  const visibleCases = getVisibleCases();
+  if (!visibleCases.length) return;
+  const index = getSelectedVisibleIndex(visibleCases);
+  const nextIndex = Math.min(visibleCases.length - 1, Math.max(0, (index < 0 ? 0 : index + delta)));
+  selectCase(visibleCases[nextIndex].caseId);
 }
 
 function updateViewerLink(selected) {
@@ -514,9 +641,53 @@ function bindEvents() {
   refs.rankingBody.addEventListener('click', (event) => {
     const button = event.target.closest('[data-case-id]');
     if (!button) return;
-    state.selectedCaseId = Number(button.dataset.caseId);
-    renderRanking();
-    renderSelectedCase();
+    // 一覧と詳細は同時に見えないので、行を選んだらそのまま詳細へ切り替える。
+    selectCase(Number(button.dataset.caseId));
+    setView(VIEW_DETAIL);
+  });
+
+  refs.tabList.addEventListener('click', () => setView(VIEW_LIST));
+  refs.tabDetail.addEventListener('click', () => setView(VIEW_DETAIL));
+  refs.prevCase.addEventListener('click', () => stepSelection(-1));
+  refs.nextCase.addEventListener('click', () => stepSelection(1));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('input, select, textarea, [contenteditable="true"]')) {
+      if (event.key === 'Escape' && target instanceof HTMLInputElement) target.blur();
+      return;
+    }
+    if (!state.manifest) return;
+
+    switch (event.key) {
+      case 'ArrowLeft':
+      case 'k':
+      case 'K':
+        event.preventDefault();
+        stepSelection(-1);
+        break;
+      case 'ArrowRight':
+      case 'j':
+      case 'J':
+        event.preventDefault();
+        stepSelection(1);
+        break;
+      case 'Enter':
+        if (state.view === VIEW_LIST && !(target instanceof HTMLElement && target.closest('button, a'))) {
+          event.preventDefault();
+          setView(VIEW_DETAIL);
+        }
+        break;
+      case 'Escape':
+        if (state.view === VIEW_DETAIL) {
+          event.preventDefault();
+          setView(VIEW_LIST);
+        }
+        break;
+      default:
+        break;
+    }
   });
 }
 
@@ -530,14 +701,29 @@ async function loadData() {
   state.fieldMaskUrl = rgbaToDataUrl(buildFieldMaskRgba(state.field, data.analysisOptions), state.field.outputSize);
 }
 
+function applyInitialSelection() {
+  const params = new URLSearchParams(window.location.search);
+  const caseParam = params.get('case');
+  if (caseParam !== null && caseParam !== '' && Number.isFinite(Number(caseParam))) {
+    const caseId = Number(caseParam);
+    if (state.manifest.cases.some((entry) => entry.caseId === caseId)) {
+      state.selectedCaseId = caseId;
+    }
+  }
+  return params.get('view') === VIEW_DETAIL ? VIEW_DETAIL : VIEW_LIST;
+}
+
 async function main() {
   createApp();
   bindEvents();
+  setView(VIEW_LIST);
   try {
     await loadData();
+    const initialView = applyInitialSelection();
     updateDatasetMeta();
     renderRanking();
     updateGlobalField();
+    setView(initialView);
     await renderSelectedCase();
   } catch (error) {
     refs.datasetMeta.innerHTML = `
