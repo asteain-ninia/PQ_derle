@@ -387,6 +387,8 @@ function renderRanking() {
     : '<tr><td colspan="7">filter に一致するケースがありません。</td></tr>';
   refs.tabListSub.textContent = `${visibleCases.length} 件`;
   updateNavigation();
+  // filter / sort / rows の変更で選択中の case が差し替わることがあるので、URL も合わせる。
+  syncLocation();
 }
 
 function getSelectedVisibleIndex(visibleCases = getVisibleCases()) {
@@ -701,6 +703,21 @@ async function loadData() {
   state.fieldMaskUrl = rgbaToDataUrl(buildFieldMaskRgba(state.field, data.analysisOptions), state.field.outputSize);
 }
 
+// 直リンクの case が既定の表示件数より下位にあると、ensureSelectedCase() が
+// 先頭の case に差し替えてしまう。その case が入るところまで rows を広げる。
+function ensureVisibleCountIncludes(caseId) {
+  sortCases();
+  const rank = state.sortedCases.findIndex((entry) => entry.caseId === caseId);
+  if (rank < state.visibleCount) return;
+  const options = Array.from(refs.countSelect.options)
+    .map((option) => Number(option.value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  const nextCount = options.find((value) => value > rank) ?? options.at(-1);
+  state.visibleCount = nextCount;
+  refs.countSelect.value = String(nextCount);
+}
+
 function applyInitialSelection() {
   const params = new URLSearchParams(window.location.search);
   const caseParam = params.get('case');
@@ -708,6 +725,7 @@ function applyInitialSelection() {
     const caseId = Number(caseParam);
     if (state.manifest.cases.some((entry) => entry.caseId === caseId)) {
       state.selectedCaseId = caseId;
+      ensureVisibleCountIncludes(caseId);
     }
   }
   return params.get('view') === VIEW_DETAIL ? VIEW_DETAIL : VIEW_LIST;
