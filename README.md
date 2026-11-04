@@ -57,6 +57,38 @@ npm run transform -- "イラレ出界図.svg" "out/イラレ出界図_peirceq_lo
 - `lon0`: 旧オプションです。`center-lon` の別名として引き続き使えます。
 - `--side` を省略した場合は、入力フレーム幅をそのまま出力辺長に使います。
 
+## SVG To PNG
+
+レイヤーを取捨選択しながら、元 SVG をそのまま PNG にラスタライズする補助 CLI を追加しました。
+
+まず入力 SVG のレイヤー一覧を見ます。
+
+```bash
+npm run svg-png -- "イラレ出界図.svg" --list-layers
+```
+
+例:
+
+```bash
+npm run svg-png -- "イラレ出界図.svg" "out/第二分高面.png" --include-layer=_第二分高面 --exclude-layer=_文字,_境界 --width=12000
+```
+
+主なオプション:
+
+```bash
+--include-layer=_海,_第二分高面
+--exclude-layer=_文字,_境界
+--width=12000
+--height=6000
+--zoom=2
+--background=white
+```
+
+- `include-layer`: 指定した `id` または `data-name` に一致するレイヤーだけを残します。親レイヤーは自動で保持します。
+- `exclude-layer`: 指定したレイヤーを落とします。`include-layer` の後に適用します。
+- `width` / `height` / `zoom`: 出力サイズ指定です。幅・高さは片方だけ指定できます。
+- サイズ指定を省略した場合、極端に大きい SVG は既定で最大辺 `8192px` に抑えて安全側へ倒します。さらに大きく出したい場合は `--width` などで明示指定してください。
+
 ## Batch Sweep
 
 低解像度 PNG で大量の向きを試すための総当たりモードを追加しました。
