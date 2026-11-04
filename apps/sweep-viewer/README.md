@@ -15,9 +15,12 @@ npm run dev
 
 ## 既定入力
 
-- first choice: `out/sweep-full-defaults/viewer-manifest.json`
-- fallback: `out/sweep-full-defaults/manifest.json`
+- `out/sweep-full-defaults/manifest.json` (`npm run sweep` の出力そのまま)。quarter-turn の sweep は
+  viewer が読み込み時に 90° 回転ぶんを補って full-turn に展開するので、事前の変換は要りません
+- 同じ場所に `viewer-manifest.json` (後述の事前展開済み manifest、任意) があればそちらを先に読みます
 - ライブ描画の元画像: manifest の `sourceImage.png`、無ければ manifest と同じ場所の `source-equirect.png`
+- ranking viewer (`/sweep-ranking.html`) の詳細にある `motion viewer` リンクは、同じ sweep の
+  `manifest.json` をこの viewer で開き、その case の向きを初期値にします
 
 URL クエリで差し替えできます。
 
@@ -67,11 +70,14 @@ URL の `render=` で方式を固定できます (`auto` / `webgl` / `cpu` / `pn
 - PNG 表示での quarter-turn 補完は、roll +90° = 図の反時計回り 90° 回転として表示します
   (以前は時計回りに回していたため、roll 90° / 270° 付近で向きが違っていました)
 
-## viewer manifest 生成
+## viewer manifest 生成 (任意)
+
+viewer は `manifest.json` を読み込み時に展開するので、通常この手順は要りません。
+展開済みの manifest をファイルとして残したいときだけ使います。
 
 ```bash
 node scripts/generate-sweep-viewer-manifest.mjs
 ```
 
 既定では `out/sweep-full-defaults/manifest.json` から
-`out/sweep-full-defaults/viewer-manifest.json` を生成します。
+`out/sweep-full-defaults/viewer-manifest.json` を生成します (中身は viewer が読み込み時に作るものと同じです)。

@@ -36,6 +36,8 @@ URL クエリで差し替えできます。
 - キーボード: `←` `→` または `k` `j` で順位移動、`Enter` で詳細、`Esc` で一覧に戻ります
   (filter 入力中は文字入力が優先されます)。
 - 選んだ case と表示中の画面は URL の `?case=<caseId>&view=detail` に残るので、再読込やリンク共有でも同じ画面を開けます。
+- Dataset 欄の `motion viewer` リンクは、同じ sweep の `manifest.json` を sweep viewer (`/sweep-viewer.html`) で開き、
+  選択中の case の向き (lon / lat / roll) を初期値にします。sweep 出力以外の事前準備は要りません。
 
 ## 指標
 

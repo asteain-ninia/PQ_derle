@@ -488,7 +488,10 @@ function updateViewerLink(selected) {
     refs.viewerLink.removeAttribute('href');
     return;
   }
-  const viewerManifestUrl = new URL('./viewer-manifest.json', state.manifestUrl);
+  // sweep viewer は sweep 出力の manifest.json をそのまま読める (quarter-turn の展開も
+  // ライブ描画の元画像の解決も読込時に行う)。ranking manifest は manifest.json と同じ場所にある。
+  // viewer-manifest.json は任意の事前展開ファイルで、sweep → rank-sweep の流れでは作られない。
+  const viewerManifestUrl = new URL('./manifest.json', state.manifestUrl);
   const viewerUrl = new URL('/sweep-viewer.html', window.location.origin);
   viewerUrl.searchParams.set('manifest', viewerManifestUrl.href);
   viewerUrl.searchParams.set('lon', formatAngleLabel(selected.centerLon, 2));
