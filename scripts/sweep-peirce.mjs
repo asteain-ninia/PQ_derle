@@ -1,19 +1,19 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Resvg } from '@resvg/resvg-js';
-import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
-import { PNG } from 'pngjs';
 import {
   DEFAULT_SWEEP_OPTIONS,
   buildSweepCaseFileName,
   enumerateSweepCases,
-  estimateBackgroundColor,
   formatSweepCaseLabel,
   renderSweepCase,
 } from '../src/sweep-core.js';
-import { prepareSweepSourceSvg } from '../src/sweep-source-svg.js';
-
-const DEFAULT_SOURCE_WIDTH = 3072;
+import {
+  DEFAULT_SOURCE_WIDTH,
+  encodePng,
+  parseSvgMetadata,
+  rasterizeSweepSource,
+  SOURCE_IMAGE_FILE_NAME,
+} from './lib/sweep-source-raster.mjs';
 
 function printUsage() {
   console.log(`Usage:
@@ -54,136 +54,6 @@ function parseNumberOption(value, fallback) {
     throw new Error(`Invalid numeric value: ${value}`);
   }
   return parsed;
-}
-
-function localName(node) {
-  return node.localName || node.nodeName;
-}
-
-function parseFloatList(value) {
-  if (!value) return [];
-  const matches = value.match(/[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?/g);
-  return matches ? matches.map(Number) : [];
-}
-
-function getViewBox(root) {
-  const values = parseFloatList(root.getAttribute('viewBox'));
-  if (values.length === 4) {
-    return { x: values[0], y: values[1], width: values[2], height: values[3] };
-  }
-
-  return {
-    x: 0,
-    y: 0,
-    width: Number.parseFloat(root.getAttribute('width') || '0') || 0,
-    height: Number.parseFloat(root.getAttribute('height') || '0') || 0,
-  };
-}
-
-function findMapFrame(root) {
-  const rects = Array.from(root.getElementsByTagName('rect'));
-  let best = null;
-  for (const rect of rects) {
-    const x = Number.parseFloat(rect.getAttribute('x') || '0');
-    const y = Number.parseFloat(rect.getAttribute('y') || '0');
-    const width = Number.parseFloat(rect.getAttribute('width') || '0');
-    const height = Number.parseFloat(rect.getAttribute('height') || '0');
-    if (!(width > 0 && height > 0)) continue;
-    const ratioPenalty = Math.abs(width / height - 2);
-    const score = width * height - ratioPenalty * 1000000;
-    if (!best || score > best.score) {
-      best = { score, x, y, width, height };
-    }
-  }
-
-  if (best) return best;
-  const viewBox = getViewBox(root);
-  return {
-    score: viewBox.width * viewBox.height,
-    x: viewBox.x,
-    y: viewBox.y,
-    width: viewBox.width,
-    height: viewBox.height,
-  };
-}
-
-function detectSourceScale(root, viewBox) {
-  const width = Number.parseFloat(root.getAttribute('width') || '0');
-  if (!viewBox.width || !Number.isFinite(width) || width <= 0) return 1;
-  return width / viewBox.width;
-}
-
-function parseSvgMetadata(svgText) {
-  const document = new DOMParser().parseFromString(svgText, 'image/svg+xml');
-  const root = document.documentElement;
-  if (!root || localName(root) !== 'svg') {
-    throw new Error('Input is not a valid SVG document.');
-  }
-  const parserErrors = document.getElementsByTagName('parsererror');
-  if (parserErrors.length > 0) {
-    throw new Error('SVG parsing failed.');
-  }
-
-  const viewBox = getViewBox(root);
-  const frame = findMapFrame(root);
-  const sourceScale = detectSourceScale(root, viewBox);
-  if (!(frame.width > 0 && frame.height > 0)) {
-    throw new Error('Could not detect a valid 2:1 map frame.');
-  }
-  return { viewBox, frame, sourceScale };
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function cropRenderedFrame(renderedImage, metadata) {
-  const { viewBox, frame } = metadata;
-  const scaleX = renderedImage.width / viewBox.width;
-  const scaleY = renderedImage.height / viewBox.height;
-  const left = clamp(Math.floor((frame.x - viewBox.x) * scaleX), 0, renderedImage.width - 1);
-  const top = clamp(Math.floor((frame.y - viewBox.y) * scaleY), 0, renderedImage.height - 1);
-  const right = clamp(Math.ceil((frame.x + frame.width - viewBox.x) * scaleX), left + 1, renderedImage.width);
-  const bottom = clamp(Math.ceil((frame.y + frame.height - viewBox.y) * scaleY), top + 1, renderedImage.height);
-  const width = Math.max(1, right - left);
-  const height = Math.max(1, bottom - top);
-  const pixels = new Uint8ClampedArray(width * height * 4);
-  const source = renderedImage.pixels;
-
-  for (let y = 0; y < height; y += 1) {
-    const sourceOffset = ((top + y) * renderedImage.width + left) * 4;
-    const targetOffset = y * width * 4;
-    pixels.set(source.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
-  }
-
-  return {
-    width,
-    height,
-    pixels,
-  };
-}
-
-function rasterizeSourceFrame(svgText, metadata, sourceWidth) {
-  const zoom = sourceWidth / (metadata.frame.width * metadata.sourceScale);
-  const resvg = new Resvg(svgText, {
-    fitTo: { mode: 'zoom', value: zoom },
-    imageRendering: 0,
-    shapeRendering: 2,
-    textRendering: 1,
-    background: 'rgba(0,0,0,0)',
-  });
-  const rendered = resvg.render();
-  const frameImage = cropRenderedFrame(rendered, metadata);
-  return {
-    ...frameImage,
-    background: estimateBackgroundColor(frameImage),
-  };
-}
-
-function encodePng(image) {
-  const png = new PNG({ width: image.width, height: image.height });
-  png.data = Buffer.from(image.pixels);
-  return PNG.sync.write(png);
 }
 
 async function fileExists(targetPath) {
@@ -309,8 +179,7 @@ async function main() {
 
   const [inputPath, outputDir] = positional;
   const svgText = await fs.readFile(inputPath, 'utf8');
-  const metadata = parseSvgMetadata(svgText);
-  const filteredSvgText = prepareSweepSourceSvg(svgText, { DOMParser, XMLSerializer });
+  parseSvgMetadata(svgText); // dry-run でも入力の妥当性だけは確かめる
   const sweepOptions = {
     ...DEFAULT_SWEEP_OPTIONS,
     centerLonMin: parseNumberOption(options['lon-min'], DEFAULT_SWEEP_OPTIONS.centerLonMin),
@@ -353,7 +222,9 @@ async function main() {
   }
 
   await fs.mkdir(outputDir, { recursive: true });
-  const sourceImage = rasterizeSourceFrame(filteredSvgText, metadata, sourceWidth);
+  const sourceImage = rasterizeSweepSource(svgText, sourceWidth);
+  // viewer のライブ描画用に、各ケースを描いたのと同じ元画像を残す
+  await fs.writeFile(path.join(outputDir, SOURCE_IMAGE_FILE_NAME), encodePng(sourceImage));
   const manifestCases = [];
   const startedAt = Date.now();
   let renderedCount = 0;
@@ -401,6 +272,13 @@ async function main() {
     sourceFrame: {
       width: sourceImage.width,
       height: sourceImage.height,
+    },
+    sourceWidth,
+    sourceImage: {
+      png: SOURCE_IMAGE_FILE_NAME,
+      width: sourceImage.width,
+      height: sourceImage.height,
+      background: sourceImage.background,
     },
     options: enumerated.options,
     sourceFilter: {

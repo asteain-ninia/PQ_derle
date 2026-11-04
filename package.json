@@ -11,7 +11,8 @@
     "svg-png": "node scripts/svg-to-png.mjs",
     "sweep": "node scripts/sweep-peirce.mjs",
     "rank-sweep": "node scripts/generate-sweep-ranking-manifest.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "sweep-source": "node scripts/generate-sweep-source.mjs"
   },
   "keywords": [],
   "author": "",

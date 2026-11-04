@@ -1,4 +1,4 @@
-import { geoPeirceQuincuncial } from 'd3-geo-projection';
+import { buildProjectionLut, renderLutFrame } from './sweep-live-render.js';
 
 const DEFAULT_BACKGROUND = [0, 0, 0, 0];
 const EPSILON = 1e-9;
@@ -18,10 +18,6 @@ export const DEFAULT_SWEEP_OPTIONS = {
 
 function roundAngle(value) {
   return Number(value.toFixed(6));
-}
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
 }
 
 export function normalizeLongitude(lon) {
@@ -178,60 +174,16 @@ export function estimateBackgroundColor(sourceImage) {
   return samples.map((channel) => Math.round(median(channel)));
 }
 
-function getPixel(sourceImage, x, y, background) {
-  if (x < 0 || x >= sourceImage.width || y < 0 || y >= sourceImage.height) {
-    return background;
+// 投影の逆変換は出力の大きさだけで決まるので、LUT を作っておき各ケースでは回転と元画像の参照だけを行う。
+// 結果は画素ごとに d3 の projection.rotate(...).invert を呼んでいた以前の実装と一致する
+// (test/sweep-live-render.test.js)。
+let cachedLut = null;
+
+function getProjectionLut(size) {
+  if (!cachedLut || cachedLut.size !== size) {
+    cachedLut = buildProjectionLut(size);
   }
-  const offset = (y * sourceImage.width + x) * 4;
-  return [
-    sourceImage.pixels[offset],
-    sourceImage.pixels[offset + 1],
-    sourceImage.pixels[offset + 2],
-    sourceImage.pixels[offset + 3],
-  ];
-}
-
-function mixChannel(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function sampleSourceRgba(sourceImage, lon, lat, background) {
-  const lonNormalized = normalizeLongitude(lon);
-  const lonFraction = ((((lonNormalized + 180) / 360) % 1) + 1) % 1;
-  const latFraction = clamp((90 - lat) / 180, 0, 1);
-
-  const x = lonFraction * sourceImage.width;
-  const wrappedX = (((x % sourceImage.width) + sourceImage.width) % sourceImage.width);
-  const y = latFraction * Math.max(sourceImage.height - 1, 1);
-
-  const x0 = Math.floor(wrappedX) % sourceImage.width;
-  const x1 = (x0 + 1) % sourceImage.width;
-  const y0 = clamp(Math.floor(y), 0, sourceImage.height - 1);
-  const y1 = clamp(y0 + 1, 0, sourceImage.height - 1);
-  const tx = wrappedX - Math.floor(wrappedX);
-  const ty = y - y0;
-
-  const c00 = getPixel(sourceImage, x0, y0, background);
-  const c10 = getPixel(sourceImage, x1, y0, background);
-  const c01 = getPixel(sourceImage, x0, y1, background);
-  const c11 = getPixel(sourceImage, x1, y1, background);
-  const rgba = [0, 0, 0, 0];
-
-  for (let channel = 0; channel < 4; channel += 1) {
-    const top = mixChannel(c00[channel], c10[channel], tx);
-    const bottom = mixChannel(c01[channel], c11[channel], tx);
-    rgba[channel] = Math.round(mixChannel(top, bottom, ty));
-  }
-
-  return rgba;
-}
-
-function setPixel(target, width, x, y, rgba) {
-  const offset = (y * width + x) * 4;
-  target[offset] = rgba[0];
-  target[offset + 1] = rgba[1];
-  target[offset + 2] = rgba[2];
-  target[offset + 3] = rgba[3];
+  return cachedLut;
 }
 
 export function renderSweepCase(sourceImage, caseDefinition, options = {}) {
@@ -239,31 +191,12 @@ export function renderSweepCase(sourceImage, caseDefinition, options = {}) {
   const width = normalizedOptions.outputSize;
   const height = normalizedOptions.outputSize;
   const background = sourceImage.background || estimateBackgroundColor(sourceImage);
-  const rgba = new Uint8ClampedArray(width * height * 4);
-  const projection = geoPeirceQuincuncial()
-    .fitExtent(
-      [
-        [0, 0],
-        [width, height],
-      ],
-      { type: 'Sphere' },
-    )
-    .rotate([-caseDefinition.centerLon, -caseDefinition.centerLat, caseDefinition.roll]);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const lonLat = projection.invert([x + 0.5, y + 0.5]);
-      const pixel = lonLat
-        ? sampleSourceRgba(sourceImage, lonLat[0], lonLat[1], background)
-        : background;
-      setPixel(rgba, width, x, y, pixel);
-    }
-  }
+  const pixels = renderLutFrame(getProjectionLut(width), sourceImage, caseDefinition, background);
 
   return {
     width,
     height,
-    pixels: rgba,
+    pixels,
   };
 }
 

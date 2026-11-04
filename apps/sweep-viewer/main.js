@@ -10,9 +10,18 @@ import {
   signedAngularDelta,
 } from './sweep-index.js';
 import { buildViewerManifest } from './viewer-assets.js';
+import { createLiveRenderer } from './live-renderer.js';
 
 const DEFAULT_INPUT_STEP = 0.5;
 const DIAL_SWEEP_DEGREES = 300;
+// ライブ描画の元画像。manifest.sourceImage.png がなければ manifest と同じ場所のこの名前を探す
+const DEFAULT_SOURCE_IMAGE = 'source-equirect.png';
+// ライブ描画の解像度の上限 (デバイス画素)
+const MAX_LIVE_RESOLUTION = 1024;
+// 中央のキャンバスとステージ端との余白 (CSS px)。下端の HUD に重ならないよう縦は多めに空ける
+const STAGE_PADDING_X = 56;
+const STAGE_PADDING_Y = 120;
+const LOCATION_SYNC_INTERVAL_MS = 250;
 
 const DEFAULT_VIEW = {
   centerLon: -143,
@@ -49,6 +58,16 @@ const state = {
   failedSourcePngs: new Set(),
   motionSignature: '',
   motionRequestId: 0,
+  neighborSignature: '',
+  // ライブ描画: status は 'off' (PNG 表示) / 'loading' / 'ready' / 'failed'
+  live: {
+    status: 'off',
+    renderer: null,
+    reason: '',
+    framePending: false,
+    lastFrame: null,
+  },
+  locationSync: { timer: 0, lastAt: 0 },
 };
 
 const refs = {};
@@ -98,9 +117,8 @@ function createApp() {
         <p class="sqv-kicker">Downstream Viewer</p>
         <h1>Peirce Sweep Motion Desk</h1>
         <p class="sqv-lead">
-          quarter-turn sweep の欠けた roll は downstream 側で 90° 回転補完し、
-          scrubber は単一の nearest asset だけを表示します。入力は連続のまま保持しつつ、
-          表示は nearest asset の roll に離散スナップし、
+          sweep が使った元画像からブラウザ上でその場で投影し直すので、どの角度でも連続に動かせます。
+          元画像が無いときやライブ描画を初期化できないときは、従来どおり nearest asset (sweep の PNG) を表示します。
           下段は quincuncial tiling の 3x3 parity preview を gap なしで出します。
         </p>
       </section>
@@ -133,8 +151,8 @@ function createApp() {
           </div>
 
           <p class="sqv-help">
-            Dial は連続値を保持します。画像合成はせず、表示は常に単一 asset のみです。<br />
-            roll 入力は連続でも、表示は nearest asset の離散 roll に固定します。<br />
+            ライブ描画では入力した角度そのままで投影します。snap 欄は参考として nearest asset の角度を示します。<br />
+            PNG 表示 (フォールバック) では nearest asset の離散角度に固定されます。<br />
             Tiling は quincuncial parity に従って odd parity だけ 180° 回転します。
           </p>
         </aside>
@@ -154,7 +172,7 @@ function createApp() {
               <div class="sqv-stage-hud">
                 <span>drag: lon / lat</span>
                 <span>shift+drag or wheel: roll</span>
-                <span>single asset only</span>
+                <span id="render-mode-badge">PNG (nearest asset)</span>
               </div>
             </div>
 
@@ -172,6 +190,7 @@ function createApp() {
 
             <div class="sqv-preview-stage" id="preview-stage">
               ${buildPreviewCells()}
+              <canvas class="sqv-preview-canvas" id="preview-canvas" aria-label="live tiling preview"></canvas>
             </div>
           </article>
         </section>
@@ -187,6 +206,7 @@ function createApp() {
   refs.neighborStrip = app.querySelector('#neighbor-strip');
   refs.motionStage = app.querySelector('#motion-stage');
   refs.motionImage = app.querySelector('#motion-image');
+  refs.renderModeBadge = app.querySelector('#render-mode-badge');
   refs.copyLinkButton = app.querySelector('#copy-link');
   refs.resetSelectionButton = app.querySelector('#reset-selection');
   refs.controls = {
@@ -198,6 +218,8 @@ function createApp() {
     variant,
     image: app.querySelector(`[data-preview-image="${variant.key}"]`),
   }));
+  refs.previewStage = app.querySelector('#preview-stage');
+  refs.previewCanvas = app.querySelector('#preview-canvas');
 
   bindEvents();
 }
@@ -208,6 +230,15 @@ function getInitialManifestUrls() {
     return [new URL(params.get('manifest'), window.location.href)];
   }
   return DEFAULT_SWEEP_MANIFEST_PATHS.map((value) => new URL(value, window.location.origin));
+}
+
+function getInitialRenderMode() {
+  const value = new URLSearchParams(window.location.search).get('render');
+  return ['auto', 'webgl', 'cpu', 'png'].includes(value) ? value : 'auto';
+}
+
+function isLiveReady() {
+  return state.live.status === 'ready';
 }
 
 function getInitialTarget() {
@@ -308,7 +339,31 @@ function updateDatasetMeta() {
     <div><dt>roll step</dt><dd>${formatAngleLabel(state.sweepIndex.rollStep, 0)}°</dd></div>
     <div><dt>roll補完</dt><dd>${escapeHtml(compensation)}</dd></div>
     <div><dt>source</dt><dd>${escapeHtml(state.sourceSweepManifest.inputFile)}</dd></div>
+    <div><dt>描画</dt><dd id="render-mode-meta">${escapeHtml(describeRenderMode())}</dd></div>
   `;
+}
+
+function describeRenderMode() {
+  const { live } = state;
+  if (live.status === 'ready') {
+    const renderer = live.renderer;
+    return `ライブ (${renderer.backend}, ${renderer.renderSize}px, 元画像 ${renderer.source.width}x${renderer.source.height})`;
+  }
+  if (live.status === 'loading') return 'ライブ描画を準備中 (それまで PNG 表示)';
+  if (live.status === 'failed') return `PNG 表示 (ライブ描画を使えません: ${live.reason})`;
+  return 'PNG 表示 (nearest asset)';
+}
+
+function updateRenderModeDisplay() {
+  const text = describeRenderMode();
+  const meta = refs.datasetMeta.querySelector('#render-mode-meta');
+  if (meta) meta.textContent = text;
+  refs.renderModeBadge.textContent = isLiveReady()
+    ? `live ${state.live.renderer.backend}`
+    : 'PNG (nearest asset)';
+  refs.renderModeBadge.title = text;
+  refs.motionStage.classList.toggle('is-live', isLiveReady());
+  refs.previewStage.classList.toggle('is-live', isLiveReady());
 }
 
 function normalizeDialValue(axisName, value) {
@@ -334,7 +389,8 @@ function getSnapDelta(axisName, targetValue, snappedValue) {
 function setAxisDisplay(axisName, targetValue, snappedValue) {
   const axisRefs = refs.controls[axisName];
   axisRefs.number.value = formatAngleLabel(targetValue, 2);
-  axisRefs.snap.textContent = `snap ${formatAngleLabel(snappedValue)} / d ${formatAngleLabel(getSnapDelta(axisName, targetValue, snappedValue))}`;
+  const prefix = isLiveReady() ? 'nearest asset' : 'snap';
+  axisRefs.snap.textContent = `${prefix} ${formatAngleLabel(snappedValue)} / d ${formatAngleLabel(getSnapDelta(axisName, targetValue, snappedValue))}`;
   axisRefs.indicator.style.transform = `translate(-50%, -50%) rotate(${getDialAngle(axisName, axisRefs, targetValue)}deg)`;
 }
 
@@ -344,8 +400,10 @@ function updateControlValues(targetOrientation, snappedCase) {
   setAxisDisplay('roll', targetOrientation.roll, snappedCase.roll);
 }
 
+// roll を +90° すると投影図は反時計回りに 90° 回る (test/sweep-live-render.test.js で確認)。
+// CSS の rotate は正の角度が時計回りなので、補完した roll 分は負の角度で回す。
 function buildImageTransform(rotationDegrees) {
-  return `translate(-50%, -50%) rotate(${rotationDegrees}deg)`;
+  return `translate(-50%, -50%) rotate(${-rotationDegrees}deg)`;
 }
 
 function getRenderedRotation(selection) {
@@ -429,13 +487,19 @@ function updatePreviewTiles(selection) {
 
   for (const { variant, image } of refs.previewTiles) {
     const tileRotation = isOddParityTile(variant) ? 180 : 0;
-    image.src = imageUrl;
+    if (image.dataset.imageUrl !== imageUrl) {
+      image.src = imageUrl;
+      image.dataset.imageUrl = imageUrl;
+    }
     image.alt = `${selection.label} / ${variant.title}`;
-    image.style.transform = `rotate(${baseRotation + tileRotation}deg)`;
+    image.style.transform = `rotate(${-baseRotation + tileRotation}deg)`;
   }
 }
 
 function renderNeighbors() {
+  const signature = String(state.selectedCase.caseKey ?? state.selectedCase.caseId);
+  if (signature === state.neighborSignature) return;
+  state.neighborSignature = signature;
   const neighbors = getNeighborCases(state.sweepIndex, state.selectedCase);
   refs.neighborStrip.innerHTML = neighbors
     .map((neighbor) => `
@@ -455,11 +519,38 @@ function prefetchNeighbors() {
 }
 
 function updateReadout(targetOrientation, selection) {
-  refs.caseReadout.textContent = `target ${formatAngleLabel(targetOrientation.centerLon)} / ${formatAngleLabel(targetOrientation.centerLat)} / ${formatAngleLabel(targetOrientation.roll)} | snap ${formatAngleLabel(selection.centerLon)} / ${formatAngleLabel(selection.centerLat)} / ${formatAngleLabel(selection.roll)} | source ${selection.sourceCaseId}`;
-  refs.tilingReadout.textContent = 'odd parity tiles rotate 180deg; preview has no inter-tile gap';
+  const target = `${formatAngleLabel(targetOrientation.centerLon)} / ${formatAngleLabel(targetOrientation.centerLat)} / ${formatAngleLabel(targetOrientation.roll)}`;
+  const nearest = `${formatAngleLabel(selection.centerLon)} / ${formatAngleLabel(selection.centerLat)} / ${formatAngleLabel(selection.roll)}`;
+  refs.caseReadout.textContent = isLiveReady()
+    ? `live ${target} | nearest asset ${nearest} (source ${selection.sourceCaseId})`
+    : `target ${target} | snap ${nearest} | source ${selection.sourceCaseId}`;
+  refs.tilingReadout.textContent = isLiveReady()
+    ? 'live frame; odd parity tiles rotate 180deg; no inter-tile gap'
+    : 'odd parity tiles rotate 180deg; preview has no inter-tile gap';
 }
 
+// history.replaceState を pointermove ごとに呼ぶとブラウザに間引かれるので、間隔を空けて最後の値を書く
 function syncLocation(targetOrientation) {
+  const sync = state.locationSync;
+  const elapsed = performance.now() - sync.lastAt;
+  window.clearTimeout(sync.timer);
+  if (elapsed >= LOCATION_SYNC_INTERVAL_MS) {
+    writeLocation(targetOrientation);
+    return;
+  }
+  sync.timer = window.setTimeout(() => writeLocation(state.targetOrientation), LOCATION_SYNC_INTERVAL_MS - elapsed);
+}
+
+// 間引きで待たせている URL の更新があれば、いますぐ書く (URL をコピーする前など)
+function flushLocation() {
+  window.clearTimeout(state.locationSync.timer);
+  if (state.targetOrientation && state.sweepManifestUrl) {
+    writeLocation(state.targetOrientation);
+  }
+}
+
+function writeLocation(targetOrientation) {
+  state.locationSync.lastAt = performance.now();
   const url = new URL(window.location.href);
   url.searchParams.set('lon', formatAngleLabel(targetOrientation.centerLon));
   url.searchParams.set('lat', formatAngleLabel(targetOrientation.centerLat));
@@ -478,12 +569,119 @@ function renderForTarget(target) {
 
   refs.pngLink.href = new URL(selection.sourcePng || selection.png, state.sweepManifestUrl).href;
   updateControlValues(targetOrientation, selection);
-  renderMotionImage(selection);
-  updatePreviewTiles(selection);
+  if (isLiveReady()) {
+    requestLiveFrame();
+  } else {
+    renderMotionImage(selection);
+    updatePreviewTiles(selection);
+    prefetchNeighbors();
+  }
   renderNeighbors();
-  prefetchNeighbors();
   updateReadout(targetOrientation, selection);
   syncLocation(targetOrientation);
+}
+
+function isInteracting() {
+  return Boolean(state.stageDrag || state.dialDrag);
+}
+
+// pointermove が何回来ても、描くのは次の描画タイミングで最新の向き 1 回だけ
+function requestLiveFrame() {
+  if (!isLiveReady() || state.live.framePending) return;
+  state.live.framePending = true;
+  window.requestAnimationFrame(() => {
+    state.live.framePending = false;
+    state.live.renderer.render(state.targetOrientation, { interactive: isInteracting() });
+  });
+}
+
+function getLiveSourceUrl() {
+  const sourceImage = state.sourceSweepManifest.sourceImage;
+  return new URL(sourceImage?.png || DEFAULT_SOURCE_IMAGE, state.sweepManifestUrl).href;
+}
+
+function computeLiveDisplaySize() {
+  const bounds = refs.motionStage.getBoundingClientRect();
+  const cssSize = Math.max(64, Math.floor(Math.min(bounds.width - STAGE_PADDING_X, bounds.height - STAGE_PADDING_Y)));
+  const deviceSize = Math.min(MAX_LIVE_RESOLUTION, Math.round(cssSize * (window.devicePixelRatio || 1)));
+  return { cssSize, deviceSize };
+}
+
+function applyLiveCanvasSize() {
+  const renderer = state.live.renderer;
+  if (!renderer) return null;
+  const { cssSize, deviceSize } = computeLiveDisplaySize();
+  renderer.canvas.style.width = `${cssSize}px`;
+  renderer.canvas.style.height = `${cssSize}px`;
+  return renderer.setDisplaySize(deviceSize);
+}
+
+function applyPreviewCanvasSize() {
+  const renderer = state.live.renderer;
+  if (!renderer) return;
+  const cellCssSize = refs.previewStage.clientWidth / 3;
+  renderer.setPreviewCellSize(Math.floor(cellCssSize * (window.devicePixelRatio || 1)));
+}
+
+async function initLive() {
+  const mode = getInitialRenderMode();
+  if (new URLSearchParams(window.location.search).get('liveDebug') === '1') {
+    // 計測用 (Playwright などから使う)
+    window.__sweepViewerDebug = { renderForTarget, state };
+  }
+  if (mode === 'png') {
+    state.live.status = 'failed';
+    state.live.reason = 'URL で render=png が指定されています';
+    updateRenderModeDisplay();
+    return;
+  }
+
+  state.live.status = 'loading';
+  updateRenderModeDisplay();
+  const params = new URLSearchParams(window.location.search);
+
+  try {
+    const renderer = await createLiveRenderer({
+      sourceUrl: getLiveSourceUrl(),
+      mode,
+      debugTiming: params.get('liveDebug') === '1',
+      onFrame: (info) => {
+        state.live.lastFrame = info;
+      },
+    });
+    state.live.renderer = renderer;
+    renderer.canvas.setAttribute('aria-label', 'live projection');
+    refs.motionStage.insertBefore(renderer.canvas, refs.motionImage);
+    // 3x3 preview も同じ描画器で描く (odd parity のマスは 180° 回転)
+    renderer.attachPreview(refs.previewCanvas, TILING_VARIANTS.map((variant) => ({
+      column: variant.gridX + 1,
+      row: variant.gridY + 1,
+      rotate180: isOddParityTile(variant),
+    })));
+    applyPreviewCanvasSize();
+    await applyLiveCanvasSize();
+    state.live.status = 'ready';
+    if (params.get('liveDebug') === '1') window.__sweepViewerLive = renderer;
+
+    const observer = new ResizeObserver(() => {
+      applyLiveCanvasSize();
+      applyPreviewCanvasSize();
+      updateRenderModeDisplay();
+    });
+    observer.observe(refs.motionStage);
+    observer.observe(refs.previewStage);
+  } catch (error) {
+    console.warn('[live] ライブ描画を使えないので PNG 表示にします:', error);
+    state.live.status = 'failed';
+    state.live.reason = error.message;
+    state.live.renderer?.canvas.remove();
+    state.live.renderer?.destroy();
+    state.live.renderer = null;
+  }
+
+  updateRenderModeDisplay();
+  state.motionSignature = '';
+  renderForTarget(state.targetOrientation);
 }
 
 function stepAxisValue(axisName, delta) {
@@ -549,6 +747,7 @@ function bindDial(axisName, axisRefs) {
     if (axisRefs.dial.hasPointerCapture(event.pointerId)) {
       axisRefs.dial.releasePointerCapture(event.pointerId);
     }
+    requestLiveFrame(); // ドラッグ中に解像度を落としていた場合は全解像度で描き直す
   }
 
   axisRefs.dial.addEventListener('pointerup', releaseDial);
@@ -598,6 +797,7 @@ function bindEvents() {
   });
 
   refs.copyLinkButton.addEventListener('click', async () => {
+    flushLocation();
     await navigator.clipboard.writeText(window.location.href);
     refs.copyLinkButton.textContent = 'コピー済み';
     window.setTimeout(() => {
@@ -649,6 +849,7 @@ function bindEvents() {
     if (refs.motionStage.hasPointerCapture(event.pointerId)) {
       refs.motionStage.releasePointerCapture(event.pointerId);
     }
+    requestLiveFrame(); // ドラッグ中に解像度を落としていた場合は全解像度で描き直す
   }
 
   refs.motionStage.addEventListener('pointerup', releaseMotionPointer);
@@ -724,6 +925,7 @@ async function loadData() {
   configureControls();
   updateDatasetMeta();
   renderForTarget(getInitialTarget());
+  await initLive();
 }
 
 async function main() {
