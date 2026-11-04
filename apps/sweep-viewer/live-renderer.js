@@ -395,6 +395,8 @@ class CpuBackend {
     }
     this.scratchContext.putImageData(imageData, 0, 0);
     this.context.imageSmoothingEnabled = true;
+    // 元画像の透明・半透明の画素が前のフレームに重なって残らないよう、先に消す
+    this.context.clearRect(0, 0, this.displaySize, this.displaySize);
     this.context.drawImage(this.scratch, 0, 0, this.displaySize, this.displaySize);
   }
 }
@@ -587,6 +589,9 @@ export async function createLiveRenderer({ sourceUrl, mode = 'auto', onFrame = (
     } else {
       const context = preview.context2d;
       context.imageSmoothingEnabled = true;
+      // 透明な画素に前の向きの絵が残らないよう、毎回消してから描く
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, preview.canvas.width, preview.canvas.height);
       for (const rect of previewTileRects()) {
         context.setTransform(1, 0, 0, 1, rect.x, rect.y);
         if (rect.rotate180) {

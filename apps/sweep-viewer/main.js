@@ -541,6 +541,14 @@ function syncLocation(targetOrientation) {
   sync.timer = window.setTimeout(() => writeLocation(state.targetOrientation), LOCATION_SYNC_INTERVAL_MS - elapsed);
 }
 
+// 間引きで待たせている URL の更新があれば、いますぐ書く (URL をコピーする前など)
+function flushLocation() {
+  window.clearTimeout(state.locationSync.timer);
+  if (state.targetOrientation && state.sweepManifestUrl) {
+    writeLocation(state.targetOrientation);
+  }
+}
+
 function writeLocation(targetOrientation) {
   state.locationSync.lastAt = performance.now();
   const url = new URL(window.location.href);
@@ -789,6 +797,7 @@ function bindEvents() {
   });
 
   refs.copyLinkButton.addEventListener('click', async () => {
+    flushLocation();
     await navigator.clipboard.writeText(window.location.href);
     refs.copyLinkButton.textContent = 'コピー済み';
     window.setTimeout(() => {
