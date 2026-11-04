@@ -491,7 +491,10 @@ function updateViewerLink(selected) {
   // sweep viewer は sweep 出力の manifest.json をそのまま読める (quarter-turn の展開も
   // ライブ描画の元画像の解決も読込時に行う)。ranking manifest は manifest.json と同じ場所にある。
   // viewer-manifest.json は任意の事前展開ファイルで、sweep → rank-sweep の流れでは作られない。
-  const viewerManifestUrl = new URL('./manifest.json', state.manifestUrl);
+  // rank-sweep の --input で別名の manifest を使った場合に備え、記録された元 manifest の
+  // ファイル名を優先する (sourceManifestPath は生成時の OS パスなので区切りは / と \\ の両方を見る)。
+  const sourceManifestName = String(state.manifest?.sourceManifestPath || '').split(/[\\/]/).pop() || 'manifest.json';
+  const viewerManifestUrl = new URL(`./${sourceManifestName}`, state.manifestUrl);
   const viewerUrl = new URL('/sweep-viewer.html', window.location.origin);
   viewerUrl.searchParams.set('manifest', viewerManifestUrl.href);
   viewerUrl.searchParams.set('lon', formatAngleLabel(selected.centerLon, 2));

@@ -19,8 +19,8 @@ npm run dev
   viewer が読み込み時に 90° 回転ぶんを補って full-turn に展開するので、事前の変換は要りません
 - 同じ場所に `viewer-manifest.json` (後述の事前展開済み manifest、任意) があればそちらを先に読みます
 - ライブ描画の元画像: manifest の `sourceImage.png`、無ければ manifest と同じ場所の `source-equirect.png`
-- ranking viewer (`/sweep-ranking.html`) の詳細にある `motion viewer` リンクは、同じ sweep の
-  `manifest.json` をこの viewer で開き、その case の向きを初期値にします
+- ranking viewer (`/sweep-ranking.html`) の Dataset 欄にある `motion viewer` リンクは、同じ sweep の
+  `manifest.json` (rank-sweep の `--input` で別名にした場合はその manifest) をこの viewer で開き、その case の向きを初期値にします
 
 URL クエリで差し替えできます。
 
