@@ -490,3 +490,40 @@ h2 {
     grid-template-columns: 1fr;
   }
 }
+
+/* ライブ描画 */
+.sqv-motion-canvas {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 32px);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  /* 中身が毎フレーム変わるので drop-shadow (中身から影を作り直す) ではなく box-shadow にする。不透明な正方形なので見た目は同じ */
+  box-shadow: 0 26px 34px rgba(16, 34, 53, 0.2);
+}
+
+.sqv-motion-stage.is-live .sqv-motion-image {
+  display: none;
+}
+
+.sqv-preview-stage {
+  position: relative;
+}
+
+/* 3x3 のマス全体を覆う 1 枚のキャンバス (ライブ描画のときだけ表示) */
+.sqv-preview-canvas {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.sqv-preview-stage.is-live .sqv-preview-canvas {
+  display: block;
+}
+
+.sqv-preview-stage.is-live .sqv-preview-image {
+  display: none;
+}

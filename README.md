@@ -32,7 +32,7 @@ npm run dev
 
 追加アプリ:
 
-- `/sweep-viewer.html`: `out/sweep-full-defaults` を読む downstream viewer
+- `/sweep-viewer.html`: `out/sweep-full-defaults` を読む downstream viewer。sweep と同じ元画像からブラウザでその場で投影するので角度は連続 (古い sweep 出力には先に `npm run sweep-source`。詳細は `apps/sweep-viewer/README.md`)
 - `/sweep-ranking.html`: `out/sweep-full-defaults/ranking-manifest.json` を読む歪みランキング viewer
 
 ## CLI
@@ -103,6 +103,7 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 出力:
 
 - 各ケースの PNG
+- `source-equirect.png`: 各ケースを描いた元画像 (sweep viewer のライブ描画が使う)
 - `manifest.json`
 - `manifest.csv`
 - `index.html` の簡易ギャラリー
