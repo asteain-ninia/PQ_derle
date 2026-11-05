@@ -14,6 +14,16 @@ import {
   rasterizeSweepSource,
   SOURCE_IMAGE_FILE_NAME,
 } from './lib/sweep-source-raster.mjs';
+import {
+  buildRenderKey,
+  hashRenderer,
+  planRenderCacheReuse,
+  readRenderCache,
+  writeRenderCache,
+} from './lib/sweep-render-cache.mjs';
+
+// 描画済みファイルの記録 (render-cache.json) を書き出す間隔 (ケース数)。途中で落ちても、ここまでは再利用できる
+const RENDER_CACHE_FLUSH_INTERVAL = 25;
 
 function printUsage() {
   console.log(`Usage:
@@ -225,17 +235,47 @@ async function main() {
   const sourceImage = rasterizeSweepSource(svgText, sourceWidth);
   // viewer のライブ描画用に、各ケースを描いたのと同じ元画像を残す
   await fs.writeFile(path.join(outputDir, SOURCE_IMAGE_FILE_NAME), encodePng(sourceImage));
+
+  // 既存の PNG は、前回の描画条件 (出力の大きさ・元画像・描画処理) が今回と同じときだけ再利用する
+  const renderKey = buildRenderKey({
+    svgText,
+    sourceWidth,
+    sourceImage,
+    outputSize: enumerated.options.outputSize,
+    rendererSha256: await hashRenderer(),
+  });
+  const caseFiles = cases.map((caseDefinition) => buildSweepCaseFileName(caseDefinition, cases.length));
+  const { reusable, reasons } = planRenderCacheReuse(await readRenderCache(outputDir), renderKey, skipExisting);
+  if (reasons.length) {
+    let existingCount = 0;
+    for (const fileName of caseFiles) {
+      if (await fileExists(path.join(outputDir, fileName))) existingCount += 1;
+    }
+    if (existingCount > 0) {
+      console.log(`既存の PNG ${existingCount} 件は今回の描画条件と一致すると確かめられないので作り直します:`);
+      for (const reason of reasons) console.log(`  - ${reason}`);
+    }
+  }
+  // 記録は「今回の条件で描いたと確かめられたファイル」だけにする。
+  // 条件が変わったときは先に空にしておき、途中で落ちても古い PNG を今回の条件のものと取り違えないようにする
+  const cachedFiles = new Set();
+  for (const fileName of reusable) {
+    if (await fileExists(path.join(outputDir, fileName))) cachedFiles.add(fileName);
+  }
+  await writeRenderCache(outputDir, renderKey, cachedFiles);
+
   const manifestCases = [];
   const startedAt = Date.now();
   let renderedCount = 0;
   let skippedCount = 0;
+  let unflushedCount = 0;
 
   for (let index = 0; index < cases.length; index += 1) {
     const caseDefinition = cases[index];
-    const fileName = buildSweepCaseFileName(caseDefinition, cases.length);
+    const fileName = caseFiles[index];
     const filePath = path.join(outputDir, fileName);
     const label = formatSweepCaseLabel(caseDefinition);
-    if (skipExisting && await fileExists(filePath)) {
+    if (skipExisting && cachedFiles.has(fileName)) {
       skippedCount += 1;
       manifestCases.push({
         caseId: caseDefinition.index + 1,
@@ -251,6 +291,12 @@ async function main() {
     const image = renderSweepCase(sourceImage, caseDefinition, enumerated.options);
     await fs.writeFile(filePath, encodePng(image));
     renderedCount += 1;
+    cachedFiles.add(fileName);
+    unflushedCount += 1;
+    if (unflushedCount >= RENDER_CACHE_FLUSH_INTERVAL) {
+      await writeRenderCache(outputDir, renderKey, cachedFiles);
+      unflushedCount = 0;
+    }
     manifestCases.push({
       caseId: caseDefinition.index + 1,
       centerLon: caseDefinition.centerLon,
@@ -261,6 +307,8 @@ async function main() {
     });
     console.log(`[${index + 1}/${cases.length}] ${label}`);
   }
+
+  await writeRenderCache(outputDir, renderKey, cachedFiles);
 
   const manifest = {
     generatedAt: new Date().toISOString(),

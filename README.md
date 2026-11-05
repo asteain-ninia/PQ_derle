@@ -128,7 +128,7 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 - `roll-mode=full-turn`: 同値圧縮せず 0〜360° 未満を走査します。
 - `output-size`: 各ケース PNG の一辺ピクセル数です。低くするほどケース数を優先できます。
 - `source-width`: 元の正距円筒フレームを何ピクセル幅でラスタ化するかです。
-- `skip-existing=true`: 既に出力済みの PNG を再生成せず、途中再開しやすくします。
+- `skip-existing=true`: 既に出力済みの PNG を再生成せず、途中再開しやすくします。再利用するのは、`render-cache.json` に記録した描画条件 (`output-size`・`source-width`・入力 SVG の内容・元画像の画素・描画処理のコード) が今回と同じで、その条件で描いたと記録にあるファイルだけです。条件が違えば理由を表示して作り直します。
 - `dry-run`: 実ファイルを作らず、生成ケース数だけ確認します。
 - sweep 出力では、評価の邪魔になる経緯線・文字・境界・ストロークを既定で含めません。
 
@@ -138,6 +138,7 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 - `source-equirect.png`: 各ケースを描いた元画像 (sweep viewer のライブ描画が使う)
 - `manifest.json`
 - `manifest.csv`
+- `render-cache.json`: 各ケース PNG を描いた条件と、その条件で描いたファイルの一覧 (`skip-existing` が使う)
 - `index.html` の簡易ギャラリー
 
 推奨フロー:

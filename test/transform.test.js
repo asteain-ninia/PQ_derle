@@ -130,6 +130,46 @@ test('transformSvgString supports centerLon/centerLat/roll orientation', async (
   );
 });
 
+test('transformSvgString draws the 180° meridian once in the generated graticule', async () => {
+  // 元の図では ±180° の経線は経緯線グループの枠 rect が兼ねていて、置き換えで消える。生成側で 180° を描く
+  const svgText = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="180" viewBox="0 0 360 180">
+  <rect x="0" y="0" width="360" height="180" fill="#ddeeff" />
+  <g id="_経緯線"><g id="_30_"><rect x="0" y="0" width="360" height="180" fill="none" stroke="#000" /></g></g>
+</svg>`;
+  const result = await transformSvgString(
+    svgText,
+    { centerLon: 30, centerLat: 20, roll: 15, outputSide: 360 },
+    { DOMParser, XMLSerializer },
+  );
+  const document = parseDocument(result.svgText);
+  const meridians = Array.from(document.getElementsByTagName('path'))
+    .filter((node) => (node.getAttribute('data-pq-generated') || '').startsWith('meridian-'));
+  const longitudes = meridians.map((node) => Number(node.getAttribute('data-pq-generated').slice('meridian-'.length)));
+  // 30° ごとに 12 本。-180° と 180° は同じ線なので 180° の 1 本だけ
+  assert.deepEqual(longitudes, [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150, 180]);
+
+  const meridian180 = meridians[longitudes.indexOf(180)];
+  const vertices = new SVGPathData(meridian180.getAttribute('d')).toAbs().commands
+    .filter((command) => command.type === SVGPathData.MOVE_TO || command.type === SVGPathData.LINE_TO)
+    .map((command) => [command.x, command.y]);
+  assert.ok(vertices.length > 2, 'meridian-180 is empty');
+
+  const projection = geoPeirceQuincuncial()
+    .fitExtent(
+      [
+        [0, 0],
+        [360, 360],
+      ],
+      { type: 'Sphere' },
+    );
+  const rotation = geoRotation([-30, -20, 15]);
+  for (const latitude of [60, 20, -20, -60]) {
+    const expected = projection(rotation([180, latitude]));
+    const nearest = Math.min(...vertices.map((point) => Math.hypot(point[0] - expected[0], point[1] - expected[1])));
+    assert.ok(nearest < 1, `meridian-180 misses lat ${latitude} by ${nearest}`);
+  }
+});
+
 test('transformSvgString keeps lon0 as a centerLon alias', async () => {
   const result = await transformSvgString(
     SVG_FIXTURE,
