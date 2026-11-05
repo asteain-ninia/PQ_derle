@@ -51,11 +51,28 @@ npm run transform -- "イラレ出界図.svg" "out/イラレ出界図_peirceq_lo
 --sample-step=3
 --path-precision=0.35
 --side=<output-side>
+--from-sweep
 ```
 
-- `center-lon` / `center-lat` / `roll`: 最終 SVG でも sweep と同じ向きを指定できます。
+- `center-lon` / `center-lat` / `roll`: 最終 SVG の向きです。**sweep・ビューア・ランキングと同じ数字でも、同じ向きにはなりません**（下の「sweep の向きと最終 SVG の向き」）。
+- `--from-sweep`: `center-lon` / `center-lat` / `roll` を sweep の向きとして読み、最終 SVG で同じ地図になる向きへ読み替えてから変換します。読み替えた値は標準エラーに出ます。
 - `lon0`: 旧オプションです。`center-lon` の別名として引き続き使えます。
 - `--side` を省略した場合は、入力フレーム幅をそのまま出力辺長に使います。
+
+### sweep の向きと最終 SVG の向き
+
+sweep・ビューア・ランキングと最終 SVG（`npm run transform` と Web 画面）は、同じ `centerLon` / `centerLat` / `roll` でも別の向きの地図になります。
+
+- sweep 側は、Peirce quincuncial の投影が既定で持っている回転 `[-90, -90, 45]` を打ち消してから向きの回転をかけます。指定した `(centerLon, centerLat)` が正方形の中央に来ます。
+- 最終 SVG 側は、既定の回転を残したまま、その手前に向きの回転をかけます。南極を四隅に置く処理などは、この既定の向きを前提にしています。
+
+最終 SVG の向きの決め方はこのままにして、sweep で選んだ向きを読み替えて使います。
+
+- `npm run transform -- <input.svg> <output.svg> --center-lon=... --center-lat=... --roll=... --from-sweep` で、sweep の値をそのまま渡せます。
+- `npm run convert-orientation -- --center-lon=-143 --center-lat=0 --roll=0` は、sweep の向きを最終 SVG の向きに読み替えて表示します（`--center-lon=127 --center-lat=-45 --roll=90`）。`--to=sweep` で逆向きです。Web 画面に入れる値はこれで求めます。
+- sweep ビューアの状態表示と、ランキングの詳細欄にも「最終 SVG 用」の値が出ます。
+
+読み替えは `src/orientation.js` にあり、`test/orientation.test.js` が「読み替えた値で作った最終 SVG の点が、sweep と同じ画素に来る」ことを確かめています。
 
 ## SVG To PNG
 
@@ -143,7 +160,7 @@ npm run sweep -- "イラレ出界図.svg" "out/sweep"
 推奨フロー:
 
 - まず `sweep` でケースを総当たりし、`manifest.csv` や `index.html` で当たりを探します。
-- その `centerLon` / `centerLat` / `roll` を `transform` に渡して最終 SVG を作ります。
+- その `centerLon` / `centerLat` / `roll` を `transform` に **`--from-sweep` を付けて**渡し、最終 SVG を作ります（付けないと別の向きになります。上の「sweep の向きと最終 SVG の向き」）。
 
 ## Distortion Ranking
 

@@ -12,7 +12,8 @@
     "sweep": "node scripts/sweep-peirce.mjs",
     "rank-sweep": "node scripts/generate-sweep-ranking-manifest.mjs",
     "test": "node --test",
-    "sweep-source": "node scripts/generate-sweep-source.mjs"
+    "sweep-source": "node scripts/generate-sweep-source.mjs",
+    "convert-orientation": "node scripts/convert-orientation.mjs"
   },
   "keywords": [],
   "author": "",

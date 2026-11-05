@@ -1,5 +1,6 @@
 import './style.css';
 import { formatAngleLabel } from '../sweep-viewer/sweep-index.js';
+import { formatTransformArguments } from '../../src/orientation.js';
 import {
   buildFieldHeatmapRgba,
   buildFieldMaskRgba,
@@ -525,6 +526,7 @@ function renderCaseMeta(selected) {
       <div><dt>centerLon</dt><dd>${formatAngleLabel(selected.centerLon, 2)}</dd></div>
       <div><dt>centerLat</dt><dd>${formatAngleLabel(selected.centerLat, 2)}</dd></div>
       <div><dt>roll</dt><dd>${formatAngleLabel(selected.roll, 2)}</dd></div>
+      <div><dt>最終 SVG 用</dt><dd>${escapeHtml(formatTransformArguments(selected))}</dd></div>
       <div><dt>ocean RGB</dt><dd>${selected.oceanColor.map((value) => value.toFixed(0)).join(', ')}</dd></div>
       <div><dt>land px</dt><dd>${selected.landPixelCount}</dd></div>
     `;
