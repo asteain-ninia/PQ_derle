@@ -11,6 +11,7 @@ import {
 } from './sweep-index.js';
 import { buildViewerManifest } from './viewer-assets.js';
 import { createLiveRenderer } from './live-renderer.js';
+import { formatTransformArguments } from '../../src/orientation.js';
 
 const DEFAULT_INPUT_STEP = 0.5;
 const DIAL_SWEEP_DEGREES = 300;
@@ -521,9 +522,12 @@ function prefetchNeighbors() {
 function updateReadout(targetOrientation, selection) {
   const target = `${formatAngleLabel(targetOrientation.centerLon)} / ${formatAngleLabel(targetOrientation.centerLat)} / ${formatAngleLabel(targetOrientation.roll)}`;
   const nearest = `${formatAngleLabel(selection.centerLon)} / ${formatAngleLabel(selection.centerLat)} / ${formatAngleLabel(selection.roll)}`;
+  // 最終 SVG（transform）は同じ数字でも別の向きになるので、そのまま渡せる値を並べて出す（src/orientation.js）
+  const shown = isLiveReady() ? targetOrientation : selection;
+  const forTransform = `最終 SVG: ${formatTransformArguments(shown)}`;
   refs.caseReadout.textContent = isLiveReady()
-    ? `live ${target} | nearest asset ${nearest} (source ${selection.sourceCaseId})`
-    : `target ${target} | snap ${nearest} | source ${selection.sourceCaseId}`;
+    ? `live ${target} | nearest asset ${nearest} (source ${selection.sourceCaseId}) | ${forTransform}`
+    : `target ${target} | snap ${nearest} | source ${selection.sourceCaseId} | ${forTransform}`;
   refs.tilingReadout.textContent = isLiveReady()
     ? 'live frame; odd parity tiles rotate 180deg; no inter-tile gap'
     : 'odd parity tiles rotate 180deg; preview has no inter-tile gap';
