@@ -151,6 +151,12 @@ h2 {
   cursor: pointer;
 }
 
+/* 全面に重ねた file input より上に出し、ボタンのクリックがファイル選択にならないようにする */
+.dropzone .ghost {
+  position: relative;
+  z-index: 1;
+}
+
 .drop-title {
   margin: 0;
   font-family: var(--font-display);
