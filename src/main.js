@@ -104,11 +104,19 @@ function wireEvents(app) {
 
   loadSampleButton.addEventListener('click', async () => {
     setStatus('同梱サンプルを読み込み中...');
-    const response = await fetch(bundledSampleUrl);
-    const text = await response.text();
-    state.fileName = 'イラレ出界図.svg';
-    state.sourceSvg = text;
-    setStatus(`サンプル読込完了: ${state.fileName}`);
+    try {
+      const response = await fetch(bundledSampleUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const text = await response.text();
+      state.fileName = 'イラレ出界図.svg';
+      state.sourceSvg = text;
+      setStatus(`サンプル読込完了: ${state.fileName}`);
+    } catch (error) {
+      console.error(error);
+      setStatus(`サンプル読込失敗: ${error.message}`);
+    }
   });
 
   controls.addEventListener('submit', async (event) => {
@@ -201,6 +209,14 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;');
 }
 
+// 空欄 (や数値として読めない入力) は 0 ではなく既定値にする。Number('') は 0 になるため
+function readNumberInput(selector, fallback) {
+  const raw = document.querySelector(selector).value.trim();
+  if (raw === '') return fallback;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : fallback;
+}
+
 function formatToken(value) {
   return String(Number(value).toFixed(2)).replace(/^-/, 'm').replace('.', 'p');
 }
@@ -214,11 +230,11 @@ async function runTransform() {
   setBusy(true);
   setStatus('ベクタ変換を実行中...');
 
-  const centerLon = Number(document.querySelector('#center-lon').value);
-  const centerLat = Number(document.querySelector('#center-lat').value);
-  const roll = Number(document.querySelector('#roll').value);
-  const sampleStep = Number(document.querySelector('#sample-step').value);
-  const pathPrecision = Number(document.querySelector('#path-precision').value);
+  const centerLon = readNumberInput('#center-lon', DEFAULT_OPTIONS.centerLon);
+  const centerLat = readNumberInput('#center-lat', DEFAULT_OPTIONS.centerLat);
+  const roll = readNumberInput('#roll', DEFAULT_OPTIONS.roll);
+  const sampleStep = readNumberInput('#sample-step', DEFAULT_OPTIONS.sampleStep);
+  const pathPrecision = readNumberInput('#path-precision', DEFAULT_OPTIONS.pathPrecision);
 
   try {
     const result = await transformSvgString(state.sourceSvg, {
