@@ -69,7 +69,7 @@ const INITIAL_STYLE_DECLARATIONS = {
   visibility: 'visible',
 };
 const GENERATED_GRATICULE_LATITUDES = [60, 30, 0, -30, -60];
-const GENERATED_GRATICULE_LONGITUDES = [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
+const GENERATED_GRATICULE_LONGITUDES = [-150, -120, -90, -60, -30, 0, 30, 60, 90, 120, 150, 180];
 const GRATICULE_SAMPLE_STEP = 0.25;
 
 function getDomImpl(domImpl = {}) {
