@@ -42,8 +42,8 @@ npm run sweep-source                       # out/sweep-full-defaults
 npm run sweep-source -- out/other-sweep --source-width=3072
 ```
 
-`--source-width` を省略すると manifest の `sourceWidth`、それも無ければ manifest の `sourceFrame` と
-同じ大きさになる幅を探します (`out/sweep-full-defaults` は 2048 でした)。sweep と違う幅で作ると
+`--source-width` を省略すると manifest の `sourceWidth`、それも無ければ manifest の `sourceFrame`
+より 1 画素狭い幅を使います (以前の sweep は元画像を 1 画素広く切り出していました。`out/sweep-full-defaults` は sourceFrame が 3073×1537 なので 3072)。sweep と違う幅で作ると
 PNG と見た目が合わなくなるので、合わないときは止まります。`render-cache.json` がある出力では、ケース PNG を
 描いた元画像の画素とも照合し、違えば止まります (元 SVG を直した後は `npm run sweep` で作り直します)。
 `out/sweep*/` は git 管理外なので、元画像もリポジトリには入りません (sweep 出力と同じ扱い)。

@@ -3,9 +3,10 @@
 //
 //   node scripts/generate-sweep-source.mjs [sweep-dir] [--input=<元 SVG>] [--source-width=<幅>]
 //
-// source-width を省略すると manifest.json の sourceWidth を使う。それも無い古い manifest では
-// sourceFrame の大きさに一致する幅を探す (以前の切り出しは、指定より幅が 1 画素広くなっていた)。
-// 一致しないときは止まる (違う画像でライブ描画すると PNG と見た目が合わなくなるため)。
+// source-width を省略すると manifest.json の sourceWidth を使う。それも無い古い manifest では、
+// sourceFrame より 1 画素狭い幅を使う (以前は文書全体を描いてから切り出していて、縦横とも指定より
+// 1 画素広くなっていた)。大きさがどちらとも合わないときは止まる (違う画像でライブ描画すると PNG と
+// 見た目が合わなくなるため)。
 // render-cache.json があれば、ケース PNG を描いた元画像の画素とも照合し、違えば止まる (SVG を直した後に
 // これだけ走らせると、ライブ描画が古いケース PNG・ランキングと黙って食い違うため。そのときは sweep を
 // 走らせ直す)。render-cache.json の無い古い出力では、大きさしか照合できない。
@@ -32,7 +33,13 @@ function candidateWidths(manifest, explicitWidth) {
   if (!(frameWidth > 0)) {
     throw new Error('manifest に sourceWidth も sourceFrame もありません。--source-width を指定してください。');
   }
-  return [frameWidth - 1, frameWidth];
+  return [frameWidth - 1];
+}
+
+// 今の切り出しと同じ大きさか、以前の切り出し (縦横とも 1 画素広い) で作った大きさなら一致とみなす。
+function matchesFrame(image, expected) {
+  if (!expected) return true;
+  return [0, 1].some((extra) => image.width + extra === expected.width && image.height + extra === expected.height);
 }
 
 async function main() {
@@ -48,7 +55,7 @@ async function main() {
   let sourceWidth = null;
   for (const width of candidateWidths(manifest, options['source-width'])) {
     const image = rasterizeSweepSource(svgText, width);
-    const matches = !expected || (image.width === expected.width && image.height === expected.height);
+    const matches = matchesFrame(image, expected);
     if (matches) {
       sourceImage = image;
       sourceWidth = width;
