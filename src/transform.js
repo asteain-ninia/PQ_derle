@@ -1,4 +1,4 @@
-import { geoPath, geoRotation } from 'd3-geo';
+import { geoContains, geoPath, geoRotation } from 'd3-geo';
 import { geoPeirceQuincuncial } from 'd3-geo-projection';
 import { SVGPathData } from 'svg-pathdata';
 
@@ -339,7 +339,13 @@ function buildProjection(side, precision) {
   if (typeof pathBuilder.digits === 'function') {
     pathBuilder.digits(6);
   }
-  return { projection, pathBuilder };
+  // 塗りは切れ目で自分で切ってから投影するので、南極のまわりを丸く切り取る d3 の既定の切り方を外した投影を使う。
+  const areaProjection = geoPeirceQuincuncial()
+    .precision(precision)
+    .scale(projection.scale())
+    .translate(projection.translate())
+    .preclip((stream) => stream);
+  return { projection, pathBuilder, areaProjection, cutFrame: createPeirceCutFrame(areaProjection, side) };
 }
 
 function sourcePointToOriginalLonLat(point, context) {
@@ -706,187 +712,6 @@ function explodePathDataToAtomicParts(pathData) {
     .filter(Boolean);
 }
 
-function getBoundaryPerimeterPositions(point, side, tolerance = 0.5) {
-  const snapped = snapPointToSquare(point, side, tolerance);
-  const perimeter = side * 4;
-  const positions = [];
-
-  if (Math.abs(snapped[1]) <= tolerance) positions.push(snapped[0]);
-  if (Math.abs(snapped[0] - side) <= tolerance) positions.push(side + snapped[1]);
-  if (Math.abs(snapped[1] - side) <= tolerance) positions.push((side * 3) - snapped[0]);
-  if (Math.abs(snapped[0]) <= tolerance) positions.push(perimeter - snapped[1]);
-
-  return [...new Set(positions.map((value) => (Math.abs(value - perimeter) <= tolerance ? 0 : value)))];
-}
-
-function getSquareBoundaryCorner(position, side) {
-  const perimeter = side * 4;
-  const normalized = ((position % perimeter) + perimeter) % perimeter;
-  const tolerance = Math.max(1e-6, side * 1e-9);
-  if (Math.abs(normalized) <= tolerance) return [0, 0];
-  if (Math.abs(normalized - side) <= tolerance) return [side, 0];
-  if (Math.abs(normalized - (side * 2)) <= tolerance) return [side, side];
-  if (Math.abs(normalized - (side * 3)) <= tolerance) return [0, side];
-  return null;
-}
-
-function buildShortestSquareBoundaryPath(fromPoint, toPoint, side, tolerance = 0.5) {
-  const from = snapPointToSquare(fromPoint, side, tolerance);
-  const to = snapPointToSquare(toPoint, side, tolerance);
-  const perimeter = side * 4;
-  const fromPositions = getBoundaryPerimeterPositions(from, side, tolerance);
-  const toPositions = getBoundaryPerimeterPositions(to, side, tolerance);
-  if (!fromPositions.length || !toPositions.length) return [from, to];
-
-  let best = null;
-  for (const fromPosition of fromPositions) {
-    for (const toPosition of toPositions) {
-      const clockwise = (toPosition - fromPosition + perimeter) % perimeter;
-      const counterClockwise = (fromPosition - toPosition + perimeter) % perimeter;
-      const direction = clockwise <= counterClockwise ? 'cw' : 'ccw';
-      const routeLength = Math.min(clockwise, counterClockwise);
-      if (!best || routeLength < best.routeLength) {
-        best = { fromPosition, toPosition, direction, routeLength };
-      }
-    }
-  }
-
-  const corners = [];
-  const cornerPositions = [0, side, side * 2, side * 3, side * 4];
-  if (best.direction === 'cw') {
-    for (const cornerPosition of cornerPositions) {
-      const delta = (cornerPosition - best.fromPosition + perimeter) % perimeter;
-      if (delta > tolerance && delta < best.routeLength - tolerance) {
-        const corner = getSquareBoundaryCorner(cornerPosition, side);
-        if (corner) corners.push(corner);
-      }
-    }
-  } else {
-    for (const cornerPosition of [...cornerPositions].reverse()) {
-      const delta = (best.fromPosition - cornerPosition + perimeter) % perimeter;
-      if (delta > tolerance && delta < best.routeLength - tolerance) {
-        const corner = getSquareBoundaryCorner(cornerPosition, side);
-        if (corner) corners.push(corner);
-      }
-    }
-  }
-
-  return dedupeSequentialPoints([from, ...corners, to], tolerance);
-}
-
-function buildProjectedAreaPartPath(points, side, expectedAreaSign, endpointSnapTolerance = 0.5) {
-  const segment = dedupeSequentialPoints(
-    points.map((point, index) => (
-      index === 0 || index === points.length - 1
-        ? snapPointToSquare(point, side, endpointSnapTolerance)
-        : point
-    )),
-    endpointSnapTolerance,
-  );
-  if (segment.length < 2) return '';
-
-  const boundaryPath = buildShortestSquareBoundaryPath(
-    segment[segment.length - 1],
-    segment[0],
-    side,
-    endpointSnapTolerance,
-  );
-  const polygonPoints = [...segment, ...boundaryPath.slice(1, -1)];
-  if (!hasRenderablePolygon(
-    polygonPoints,
-    Math.max(1e-4, side * side * 1e-12),
-    endpointSnapTolerance,
-  )) {
-    return '';
-  }
-
-  const polygonAreaSign = Math.sign(computeSignedPolygonArea(polygonPoints));
-  const finalPoints = expectedAreaSign && polygonAreaSign && polygonAreaSign !== expectedAreaSign
-    ? [...polygonPoints].reverse()
-    : polygonPoints;
-  return buildPathDataFromPoints(finalPoints, true);
-}
-
-function normalizeProjectedAreaSubpath(points, side, boundaryTolerance = 0.5, endpointSnapTolerance = 0.5) {
-  const ring = dedupeSequentialPoints(
-    points.map((point) => snapPointToSquare(point, side, endpointSnapTolerance)),
-    endpointSnapTolerance,
-  );
-  if (ring.length < 3) return '';
-
-  const baseRing = pointsEqual(ring[0], ring[ring.length - 1], endpointSnapTolerance)
-    ? ring.slice(0, -1)
-    : ring;
-  if (baseRing.length < 3) return '';
-
-  const closedRing = [...baseRing, baseRing[0]];
-  const splitSegmentIndexes = [];
-  for (let index = 0; index < closedRing.length - 1; index += 1) {
-    if (shouldSplitProjectedOpenJump(closedRing[index], closedRing[index + 1], side, boundaryTolerance)) {
-      splitSegmentIndexes.push(index);
-    }
-  }
-
-  const expectedAreaSign = Math.sign(computeSignedPolygonArea(baseRing));
-  if (!splitSegmentIndexes.length) {
-    return buildProjectedAreaPartPath(baseRing, side, expectedAreaSign, endpointSnapTolerance);
-  }
-
-  const parts = [];
-  const splitSegmentSet = new Set(splitSegmentIndexes);
-  const segmentCount = closedRing.length - 1;
-  const startIndex = (splitSegmentIndexes[0] + 1) % segmentCount;
-  let current = [closedRing[startIndex]];
-
-  const flushCurrent = () => {
-    const part = buildProjectedAreaPartPath(current, side, expectedAreaSign, endpointSnapTolerance);
-    if (part) parts.push(part);
-  };
-
-  for (let offset = 0; offset < segmentCount; offset += 1) {
-    const segmentIndex = (startIndex + offset) % segmentCount;
-    const endPoint = closedRing[(segmentIndex + 1) % segmentCount];
-    if (splitSegmentSet.has(segmentIndex)) {
-      flushCurrent();
-      current = [endPoint];
-      continue;
-    }
-
-    current.push(endPoint);
-  }
-
-  flushCurrent();
-  return parts.join('');
-}
-
-function normalizeProjectedAreaPath(pathData, side, boundaryTolerance = 0.5, endpointSnapTolerance = 0.5) {
-  if (!pathData) return '';
-  const parts = [];
-
-  for (const subpath of parseProjectedPathSubpaths(pathData)) {
-    if (subpath.closed) {
-      const normalized = normalizeProjectedAreaSubpath(
-        subpath.points,
-        side,
-        boundaryTolerance,
-        endpointSnapTolerance,
-      );
-      if (normalized) parts.push(normalized);
-      continue;
-    }
-
-    const openPath = buildPathDataFromPoints(subpath.points, false);
-    if (openPath) parts.push(openPath);
-  }
-
-  return parts.join('');
-}
-
-function normalizeProjectedFilledAreaPath(pathData, context) {
-  const normalized = normalizeProjectedAreaPath(pathData, context.side);
-  return stripWorldBoundarySubpaths(normalized, context.side);
-}
-
 function parsePoints(pointsValue) {
   const values = parseFloatList(pointsValue);
   const points = [];
@@ -1166,500 +991,343 @@ function isPolarSpanningOpenAreaSubpath(subpath, context) {
   return span.spansWidth && (span.touchesSouth || span.touchesNorth);
 }
 
-function isSouthPolarSpanningOpenAreaSubpath(subpath, context) {
-  if (subpath.closed) return false;
-  const span = getPolarSpanInfo(subpath, context);
-  return span.spansWidth && span.touchesSouth;
+// ---- 塗りの投影 -------------------------------------------------------------------------------
+// Peirce quincuncial の正方形の縁は、球面上では南極から赤道へ伸びる 4 本の切れ目 (半分の子午線) になる。
+// 塗りの輪は球面上でこの切れ目と交わる所で切り、切った鎖をそれぞれ投影してから、正方形の周に沿って
+// 時計回りに次の鎖の始まりへつないで閉じる。輪の内側を右手に見て回る向きに揃えてあるので、閉じる向きは
+// いつも時計回りでよい (片ごとに短い方を選ぶと、切れ目をまたぐ塗りが正方形を横切って閉じてしまう)。
+//
+// 「極の座標」は、投影の中心 (北極) を極に、正方形の四隅 (南極) を反対の極に取った球面座標で、
+// 切れ目はこの座標で、南半球の 4 本の子午線 (createPeirceCutFrame の cutLongitudes) になる。
+const RADIANS = Math.PI / 180;
+const CUT_NUDGE = 1e-7;
+
+function toVector([lon, lat]) {
+  const l = lon * RADIANS;
+  const p = lat * RADIANS;
+  return [Math.cos(p) * Math.cos(l), Math.cos(p) * Math.sin(l), Math.sin(p)];
 }
 
-function isSouthPolarSpanningFilledSubpath(subpath, style, context) {
-  if (subpath.points.length < 3 || !hasVisibleFill(style)) return false;
-  const span = getPolarSpanInfo(subpath, context);
-  return span.spansWidth && span.touchesSouth;
+function toLonLat([x, y, z]) {
+  return [Math.atan2(y, x) / RADIANS, Math.asin(Math.max(-1, Math.min(1, z / Math.hypot(x, y, z)))) / RADIANS];
 }
 
-function getPolarSeamX(context) {
-  return context.frame.x;
-}
+export function createPeirceCutFrame(projection, side) {
+  // 投影の既定の回転の後で (0, 0) が正方形の中央、(180, 0) が四隅に来る。これを北極・南極に移す。
+  const projectionRotation = geoRotation(projection.rotate());
+  const toPolarRotation = geoRotation([0, -90]);
+  const orientedToPolar = (lonLat) => toPolarRotation.invert(projectionRotation(lonLat));
+  const polarToOriented = (lonLat) => projectionRotation.invert(toPolarRotation(lonLat));
 
-function shiftPointsAroundSeam(points, seamX, period) {
-  return points.map(([x, y]) => [x < seamX ? x + period : x, y]);
-}
+  // 正方形の辺の中点 (切れ目の先端) を逆投影して、切れ目の経度を求める。
+  const raw = geoPeirceQuincuncial().rotate([0, 0, 0]).fitExtent([[-1, -1], [1, 1]], { type: 'Sphere' });
+  const cutLongitudes = [[0, -1], [1, 0], [0, 1], [-1, 0]]
+    .map((point) => toPolarRotation.invert(raw.invert(point.map((value) => value * (1 - 1e-9))))[0])
+    .sort((a, b) => a - b);
 
-function clipPolygonWithVerticalBoundary(points, boundaryX, keepGreater) {
-  if (!points.length) return [];
-  const output = [];
-  const isInside = (point) => (keepGreater ? point[0] >= boundaryX : point[0] <= boundaryX);
-  const intersect = (start, end) => {
-    const deltaX = end[0] - start[0];
-    if (deltaX === 0) return [boundaryX, start[1]];
-    const t = (boundaryX - start[0]) / deltaX;
-    return [boundaryX, start[1] + (end[1] - start[1]) * t];
+  const corners = [[0, 0], [side, 0], [side, side], [0, side]];
+  const perimeterPosition = ([x, y]) => {
+    // 時計回り (上の辺を右へ、右の辺を下へ……) に増える周上の位置。
+    const distances = [Math.abs(y), Math.abs(x - side), Math.abs(y - side), Math.abs(x)];
+    const edge = distances.indexOf(Math.min(...distances));
+    if (edge === 0) return x;
+    if (edge === 1) return side + y;
+    if (edge === 2) return side * 3 - x;
+    return (side * 4 - y) % (side * 4);
+  };
+  const snapToEdge = ([x, y]) => {
+    const distances = [Math.abs(y), Math.abs(x - side), Math.abs(y - side), Math.abs(x)];
+    const edge = distances.indexOf(Math.min(...distances));
+    const clamp = (value) => Math.max(0, Math.min(side, value));
+    if (edge === 0) return [clamp(x), 0];
+    if (edge === 1) return [side, clamp(y)];
+    if (edge === 2) return [clamp(x), side];
+    return [0, clamp(y)];
   };
 
-  let previous = points[points.length - 1];
-  let previousInside = isInside(previous);
-  for (const current of points) {
-    const currentInside = isInside(current);
-    if (currentInside && previousInside) {
-      output.push(current);
-    } else if (previousInside && !currentInside) {
-      output.push(intersect(previous, current));
-    } else if (!previousInside && currentInside) {
-      output.push(intersect(previous, current), current);
-    }
-    previous = current;
-    previousInside = currentInside;
-  }
-  return output;
+  // 切れ目 k の片側 (経度が増える側 +1・減る側 -1) が、周のどの半辺に乗り、緯度が上がると周上の位置が
+  // 増えるか減るかを、切れ目の途中の 2 点を投影して決めておく。交点の並びは、この半辺の番号と緯度だけで
+  // 決めるので、投影した座標の丸めに左右されない。
+  const halfEdges = cutLongitudes.map((lon) => [-1, 1].map((sign) => {
+    const sample = (lat) => perimeterPosition(projection(polarToOriented([lon + sign * 1e-4, lat])));
+    const low = sample(-60);
+    const high = sample(-30);
+    return { index: Math.floor(low / (side / 2)), increasing: high > low };
+  }));
+
+  return { orientedToPolar, polarToOriented, cutLongitudes, halfEdges, corners, perimeterPosition, snapToEdge };
 }
 
-function clipPolygonToVerticalBand(points, minX, maxX) {
-  const leftClipped = clipPolygonWithVerticalBoundary(points, minX, true);
-  if (!leftClipped.length) return [];
-  return clipPolygonWithVerticalBoundary(leftClipped, maxX, false);
+// 極の座標で、点 a から b への大円の弧が切れ目と交わる所を、a からの割合の順に返す。
+function findCutCrossings(a, b, frame) {
+  const crossings = [];
+  const va = toVector(a);
+  const vb = toVector(b);
+  frame.cutLongitudes.forEach((lon, cut) => {
+    const l = lon * RADIANS;
+    const normal = [-Math.sin(l), Math.cos(l), 0];
+    const sa = normal[0] * va[0] + normal[1] * va[1];
+    const sb = normal[0] * vb[0] + normal[1] * vb[1];
+    if ((sa < 0) === (sb < 0)) return;
+    const t = sa / (sa - sb);
+    const point = [va[0] + (vb[0] - va[0]) * t, va[1] + (vb[1] - va[1]) * t, va[2] + (vb[2] - va[2]) * t];
+    if (point[2] >= 0) return;
+    if (Math.cos(l) * point[0] + Math.sin(l) * point[1] < 0) return;
+    crossings.push({ t, cut, lat: toLonLat(point)[1], from: sa < 0 ? -1 : 1, to: sb < 0 ? -1 : 1 });
+  });
+  return crossings.sort((x, y) => x.t - y.t);
 }
 
-function getCyclicTrueRuns(flags) {
-  const runs = [];
-  let start = -1;
-
-  for (let index = 0; index < flags.length; index += 1) {
-    if (flags[index]) {
-      if (start === -1) start = index;
-    } else if (start !== -1) {
-      runs.push({ start, end: index - 1 });
-      start = -1;
-    }
-  }
-
-  if (start !== -1) {
-    runs.push({ start, end: flags.length - 1 });
-  }
-
-  if (runs.length > 1 && flags[0] && flags[flags.length - 1]) {
-    const first = runs[0];
-    const last = runs[runs.length - 1];
-    runs.splice(0, runs.length, { start: last.start, end: first.end + flags.length });
-  }
-
-  return runs;
-}
-
-function runContainsPoint(vertices, run, predicate) {
-  for (let index = run.start; index <= run.end; index += 1) {
-    if (predicate(vertices[index % vertices.length])) return true;
-  }
-  return false;
-}
-
-function extractSouthPolarCoastline(points, context) {
-  const vertices = closeCoordinateRing(points).slice(0, -1);
-  if (vertices.length < 4) return null;
-
-  const leftX = context.frame.x;
-  const rightX = context.frame.x + context.frame.width;
-  const southY = context.frame.y + context.frame.height;
-  const tolerance = Math.max(0.01, context.frame.height * 1e-4);
-  const poleBandTop = southY - context.frame.height * 0.15;
-  const isBottomLeft = ([x, y]) => Math.abs(x - leftX) <= tolerance && Math.abs(y - southY) <= tolerance;
-  const isBottomRight = ([x, y]) => Math.abs(x - rightX) <= tolerance && Math.abs(y - southY) <= tolerance;
-  const isClosureBoundaryPoint = ([x, y]) => {
-    const onLeft = Math.abs(x - leftX) <= tolerance;
-    const onRight = Math.abs(x - rightX) <= tolerance;
-    const onSouth = Math.abs(y - southY) <= tolerance;
-    return y >= poleBandTop - tolerance && (onLeft || onRight || onSouth);
-  };
-
-  const runs = getCyclicTrueRuns(vertices.map(isClosureBoundaryPoint));
-  const closureRun = runs
-    .filter(
-      (run) => runContainsPoint(vertices, run, isBottomLeft) && runContainsPoint(vertices, run, isBottomRight),
-    )
-    .sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
-
-  if (!closureRun) return null;
-
-  const coastline = [];
-  const count = vertices.length;
-  const start = closureRun.end % count;
-  const end = closureRun.start % count;
-  let index = start;
-
-  while (true) {
-    coastline.push(vertices[index]);
-    if (index === end) break;
-    index = (index + 1) % count;
-    if (coastline.length > count) return null;
-  }
-
-  return dedupeSequentialPoints(coastline);
-}
-
-function clipLineSegmentToVerticalBand(start, end, minX, maxX) {
-  const deltaX = end[0] - start[0];
-  let t0 = 0;
-  let t1 = 1;
-
-  if (deltaX === 0) {
-    if (start[0] < minX || start[0] > maxX) return null;
-  } else {
-    const tx1 = (minX - start[0]) / deltaX;
-    const tx2 = (maxX - start[0]) / deltaX;
-    t0 = Math.max(t0, Math.min(tx1, tx2));
-    t1 = Math.min(t1, Math.max(tx1, tx2));
-    if (t0 > t1) return null;
-  }
-
-  return [lerp(start, end, t0), lerp(start, end, t1), t0, t1];
-}
-
-function clipPolylineToVerticalBand(points, minX, maxX) {
-  if (points.length < 2) return [];
-  const tolerance = 1e-6;
-  const inside = ([x]) => x >= minX - tolerance && x <= maxX + tolerance;
-  const segments = [];
-  let current = null;
-
-  for (let index = 1; index < points.length; index += 1) {
-    const start = points[index - 1];
-    const end = points[index];
-    const clipped = clipLineSegmentToVerticalBand(start, end, minX, maxX);
-
-    if (!clipped) {
-      if (current?.length >= 2) segments.push(dedupeSequentialPoints(current));
-      current = null;
-      continue;
-    }
-
-    const [clippedStart, clippedEnd, , t1] = clipped;
-    if (!current) {
-      current = [clippedStart, clippedEnd];
-    } else if (pointsEqual(current[current.length - 1], clippedStart, tolerance)) {
-      current.push(clippedEnd);
-    } else {
-      if (current.length >= 2) segments.push(dedupeSequentialPoints(current));
-      current = [clippedStart, clippedEnd];
-    }
-
-    if (!inside(end) || t1 < 1 - tolerance) {
-      if (current.length >= 2) segments.push(dedupeSequentialPoints(current));
-      current = null;
-    }
-  }
-
-  if (current?.length >= 2) segments.push(dedupeSequentialPoints(current));
-  return segments;
-}
-
-function splitPolylineAtLargeXJumps(points, threshold, period = null, wrapStart = null) {
-  if (points.length < 2) return points.length ? [points] : [];
-  const segments = [];
-  let current = [points[0]];
-
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1];
-    const point = points[index];
-    if (Math.abs(point[0] - previous[0]) > threshold) {
-      if (period && Number.isFinite(wrapStart)) {
-        const wrapEnd = wrapStart + period;
-        const jumpedForward = point[0] > previous[0];
-        const boundaryA = jumpedForward ? wrapStart : wrapEnd;
-        const boundaryB = jumpedForward ? wrapEnd : wrapStart;
-        const adjustedPointX = jumpedForward ? point[0] - period : point[0] + period;
-        const deltaX = adjustedPointX - previous[0];
-        const t = deltaX === 0 ? 0.5 : (boundaryA - previous[0]) / deltaX;
-        const seamPointA = [boundaryA, previous[1] + (point[1] - previous[1]) * t];
-        const seamPointB = [boundaryB, seamPointA[1]];
-        current.push(seamPointA);
-        if (current.length >= 2) segments.push(dedupeSequentialPoints(current));
-        current = [seamPointB, point];
-        continue;
+// 切れ目のちょうど上や南極にある頂点は、どちらの縁に描くかが決まらないので、隣の頂点の側へわずかに寄せる。
+function moveVerticesOffCuts(ring, frame) {
+  const sideOf = (point) => {
+    let best = null;
+    frame.cutLongitudes.forEach((lon, cut) => {
+      const delta = normalizeLongitude(point[0] - lon);
+      if (point[1] < 0 && Math.abs(delta) < CUT_NUDGE && (!best || Math.abs(delta) < Math.abs(best.delta))) {
+        best = { cut, delta };
       }
-
-      if (current.length >= 2) segments.push(current);
-      current = [point];
-      continue;
-    }
-    current.push(point);
-  }
-
-  if (current.length >= 2) segments.push(current);
-  return segments;
-}
-
-function shiftedFramePointToLonLat(point, seamX, context) {
-  return [
-    normalizeLongitudeInclusive(((point[0] - seamX) / context.frame.width) * 360 - 180),
-    clampLatitude(90 - ((point[1] - context.frame.y) / context.frame.height) * 180),
-  ];
-}
-
-function projectShiftedPoint(point, seamX, context) {
-  const projected = context.projection(shiftedFramePointToLonLat(point, seamX, context));
-  if (!projected || !Number.isFinite(projected[0]) || !Number.isFinite(projected[1])) {
-    return null;
-  }
-  return snapPointToSquare(projected, context.side);
-}
-
-function getPolarSectorCorner(sector, side) {
-  if (sector === 0) return [0, 0];
-  if (sector === 1) return [0, side];
-  if (sector === 2) return [side, side];
-  return [side, 0];
-}
-
-function getPolarSectorEdges(sector) {
-  if (sector === 0) return ['top', 'left'];
-  if (sector === 1) return ['left', 'bottom'];
-  if (sector === 2) return ['bottom', 'right'];
-  return ['right', 'top'];
-}
-
-function distanceToSquareEdge(point, side, edge) {
-  if (edge === 'left') return Math.abs(point[0]);
-  if (edge === 'right') return Math.abs(point[0] - side);
-  if (edge === 'top') return Math.abs(point[1]);
-  return Math.abs(point[1] - side);
-}
-
-function snapPointToEdge(point, side, edge) {
-  if (edge === 'left') return [0, point[1]];
-  if (edge === 'right') return [side, point[1]];
-  if (edge === 'top') return [point[0], 0];
-  return [point[0], side];
-}
-
-function resolvePolarBoundaryEdges(sector, minX, maxX, seamX, context) {
-  const allowedEdges = getPolarSectorEdges(sector);
-  const sampleY = context.frame.y + context.frame.height - Math.max(0.5, context.frame.height * 0.01);
-  const resolveEdge = (boundaryX) => {
-    const projected = projectShiftedPoint([boundaryX, sampleY], seamX, context);
-    if (!projected) return null;
-    return [...allowedEdges].sort(
-      (a, b) => distanceToSquareEdge(projected, context.side, a) - distanceToSquareEdge(projected, context.side, b),
-    )[0];
+    });
+    return best;
   };
-
-  let minEdge = resolveEdge(minX);
-  let maxEdge = resolveEdge(maxX);
-  if (minEdge && maxEdge && minEdge === maxEdge) {
-    maxEdge = allowedEdges.find((edge) => edge !== minEdge) || maxEdge;
-  }
-  if (!minEdge) [minEdge] = allowedEdges;
-  if (!maxEdge) maxEdge = allowedEdges.find((edge) => edge !== minEdge) || allowedEdges[1];
-  return { min: minEdge, max: maxEdge };
-}
-
-function classifySectorBoundaryPoint(point, minX, maxX, tolerance = 1e-4) {
-  if (Math.abs(point[0] - minX) <= tolerance) return 'min';
-  if (Math.abs(point[0] - maxX) <= tolerance) return 'max';
-  return null;
-}
-
-function isPointOnVerticalBoundary(point, boundaryX, tolerance = 1e-4) {
-  return Math.abs(point[0] - boundaryX) <= tolerance;
-}
-
-function mergeSegmentsAcrossVerticalBoundary(segments, boundaryX, tolerance = 1e-4) {
-  const output = segments.map((segment) => dedupeSequentialPoints(segment)).filter((segment) => segment.length >= 2);
-
-  while (true) {
-    let bestPair = null;
-
-    for (let endIndex = 0; endIndex < output.length; endIndex += 1) {
-      const endSegment = output[endIndex];
-      const endPoint = endSegment[endSegment.length - 1];
-      if (!isPointOnVerticalBoundary(endPoint, boundaryX, tolerance)) continue;
-
-      for (let startIndex = 0; startIndex < output.length; startIndex += 1) {
-        if (startIndex === endIndex) continue;
-        const startSegment = output[startIndex];
-        const startPoint = startSegment[0];
-        if (!isPointOnVerticalBoundary(startPoint, boundaryX, tolerance)) continue;
-
-        const gap = Math.abs(startPoint[1] - endPoint[1]);
-        if (!bestPair || gap < bestPair.gap) {
-          bestPair = { endIndex, startIndex, gap };
+  const moved = ring.map((point) => [point[0], Math.max(point[1], -90 + CUT_NUDGE)]);
+  for (let index = 0; index < moved.length; index += 1) {
+    const onCut = sideOf(moved[index]);
+    if (!onCut) continue;
+    const lon = frame.cutLongitudes[onCut.cut];
+    let sign = 0;
+    for (let offset = 1; offset < moved.length && !sign; offset += 1) {
+      for (const neighbor of [moved[(index + offset) % moved.length], moved[(index - offset + moved.length) % moved.length]]) {
+        const delta = normalizeLongitude(neighbor[0] - lon);
+        if (Math.abs(delta) >= CUT_NUDGE * 4) {
+          sign = Math.sign(delta);
+          break;
         }
       }
     }
-
-    if (!bestPair) break;
-
-    const { endIndex, startIndex } = bestPair;
-    const first = output[endIndex];
-    const second = output[startIndex];
-    const merged = [...first];
-    if (!pointsEqual(first[first.length - 1], second[0], tolerance)) {
-      merged.push(second[0]);
-    }
-    merged.push(...second.slice(1));
-
-    const next = [];
-    for (let index = 0; index < output.length; index += 1) {
-      if (index !== endIndex && index !== startIndex) next.push(output[index]);
-    }
-    next.push(dedupeSequentialPoints(merged));
-    output.splice(0, output.length, ...next);
+    moved[index] = [lon + (sign || 1) * CUT_NUDGE * 2, moved[index][1]];
   }
-
-  return output;
+  return moved;
 }
 
-function buildProjectedPolarWedgePath(coastline, corner, sectorEdges, minX, maxX, seamX, context) {
-  const projected = coastline
-    .map((point) => projectShiftedPoint(point, seamX, context))
-    .filter(Boolean);
-  if (projected.length < 2) return '';
-
-  const snapped = dedupeSequentialPoints(projected.map((point) => snapPointToSquare(point, context.side)));
-  if (snapped.length < 2) return '';
-
-  const endpointTolerance = Math.max(1e-4, context.frame.width * 1e-6);
-  const firstBoundary = classifySectorBoundaryPoint(coastline[0], minX, maxX, endpointTolerance);
-  const lastBoundary = classifySectorBoundaryPoint(
-    coastline[coastline.length - 1],
-    minX,
-    maxX,
-    endpointTolerance,
-  );
-  const allowedEdges = [...new Set(Object.values(sectorEdges).filter(Boolean))];
-  const snapPolarEndpoint = (point, boundaryKind) => {
-    const edge = boundaryKind && sectorEdges[boundaryKind]
-      ? sectorEdges[boundaryKind]
-      : [...allowedEdges].sort(
-        (a, b) => distanceToSquareEdge(point, context.side, a) - distanceToSquareEdge(point, context.side, b),
-      )[0];
-    return edge
-      ? snapPointToSquare(snapPointToEdge(point, context.side, edge), context.side)
-      : point;
-  };
-
-  snapped[0] = snapPolarEndpoint(snapped[0], firstBoundary);
-  snapped[snapped.length - 1] = snapPolarEndpoint(snapped[snapped.length - 1], lastBoundary);
-
-  const wedgePoints = [...snapped, corner];
-  if (!hasRenderablePolygon(wedgePoints, Math.max(1e-4, context.side * context.side * 1e-12), endpointTolerance)) {
-    return '';
-  }
-
-  return buildPathDataFromPoints(wedgePoints, true);
+function projectLine(projection, coordinates) {
+  const points = [];
+  const stream = projection.stream({
+    point(x, y) {
+      points.push([x, y]);
+    },
+    lineStart() {},
+    lineEnd() {},
+    polygonStart() {},
+    polygonEnd() {},
+    sphere() {},
+  });
+  stream.lineStart();
+  for (const [lon, lat] of coordinates) stream.point(lon, lat);
+  stream.lineEnd();
+  return points;
 }
 
-function buildPolarSectorProjectedPaths(points, context) {
-  const coastline = extractSouthPolarCoastline(points, context) || points;
-  if (!coastline || coastline.length < 2) return [];
-  const seamX = getPolarSeamX(context);
-  const shiftedSegments = splitPolylineAtLargeXJumps(
-    closeCoordinateRing(shiftPointsAroundSeam(coastline, seamX, context.frame.width)),
-    context.frame.width / 2,
-    context.frame.width,
-    seamX,
-  );
-  const sectorWidth = context.frame.width / 4;
-  const parts = [];
+function crossingKey(crossing, side, frame) {
+  // 周上の位置の代わりに使う、時計回りに増える値。半辺ごとに 90 刻みで、半辺の中は緯度で並べる。
+  const halfEdge = frame.halfEdges[crossing.cut][side < 0 ? 0 : 1];
+  const along = crossing.lat + 90;
+  return halfEdge.index * 90 + (halfEdge.increasing ? along : 90 - along);
+}
 
-  for (let sector = 0; sector < 4; sector += 1) {
-    const minX = seamX + sector * sectorWidth;
-    const maxX = minX + sectorWidth;
-    const corner = getPolarSectorCorner(sector, context.side);
-    const sectorEdges = resolvePolarBoundaryEdges(sector, minX, maxX, seamX, context);
-    const clippedSegments = [];
-    for (const shiftedSegment of shiftedSegments) {
-      clippedSegments.push(...clipPolylineToVerticalBand(shiftedSegment, minX, maxX));
-    }
+function crossingPoint(crossing, side, frame) {
+  const lon = frame.cutLongitudes[crossing.cut] + side * CUT_NUDGE;
+  return frame.polarToOriented([lon, Math.max(crossing.lat, -90 + CUT_NUDGE)]);
+}
 
-    const mergedSegments = mergeSegmentsAcrossVerticalBoundary(
-      clippedSegments,
-      context.frame.x + context.frame.width,
-      Math.max(1e-4, context.frame.width * 1e-6),
-    );
+/**
+ * 経度・緯度の平面で輪が囲む領域が、球面に占める割合。∬cosφ dφdλ = ∮ sinφ dλ (グリーンの定理) で、輪の向きにも
+ * 輪が自分と交わるかにもよらず、平面での面積に応じた値になる。地図の下端 (φ = -90) を通る極の輪も正しく測る。
+ */
+export function planarRegionSphereFraction(lonLatPoints) {
+  let sum = 0;
+  for (let index = 0; index < lonLatPoints.length; index += 1) {
+    const [lon0, lat0] = lonLatPoints[index];
+    const [lon1, lat1] = lonLatPoints[(index + 1) % lonLatPoints.length];
+    sum += (lon1 - lon0) * RADIANS * (Math.sin(lat0 * RADIANS) + Math.sin(lat1 * RADIANS)) / 2;
+  }
+  return Math.abs(sum) / (4 * Math.PI);
+}
 
-    for (const segment of mergedSegments) {
-      const wedgePath = buildProjectedPolarWedgePath(
-        segment,
-        corner,
-        sectorEdges,
-        minX,
-        maxX,
-        seamX,
-        context,
-      );
-      if (wedgePath) {
-        parts.push(wedgePath);
-      }
-    }
+/**
+ * 向きを決めた後の球面座標 (経度・緯度) の輪を、塗りとして正方形へ投影する。輪は内側を右手に見る向き
+ * (d3 の多角形の外周の向き) で、sphereFraction はその内側が球面に占める割合 (planarRegionSphereFraction)。
+ * 返すのは、別々の path にしてよい閉じた多角形の一覧と、輪の外側が正方形の縁を全部含むときの
+ * 「正方形から輪をくり抜いた」一つの path。
+ */
+export function projectSphericalAreaRing(ring, projection, frame, side, sphereFraction) {
+  // 自分と交わる細い輪 (行って戻るだけの筋など) は、切れ目の所の向きが輪全体の向きと食い違い、時計回りに
+  // 閉じると正方形を一周してしまう。正方形に占める割合が球面に占める割合から大きく離れたら、逆向きの輪の
+  // 結果 (補集合) と比べて近い方を採る。自分と交わらない輪では、両者の差は投影の面積の歪みの分しかない。
+  const result = projectOrientedAreaRing(ring, projection, frame, side);
+  const squareFraction = projectedAreaFraction(result, side);
+  if (Math.abs(squareFraction - sphereFraction) <= 0.25) return result;
+  const reversed = projectOrientedAreaRing([...ring].reverse(), projection, frame, side);
+  const reversedFraction = projectedAreaFraction(reversed, side);
+  return Math.abs(reversedFraction - sphereFraction) < Math.abs(squareFraction - sphereFraction) ? reversed : result;
+}
+
+function projectedAreaFraction({ polygons, holed }, side) {
+  let area = polygons.reduce((sum, polygon) => sum + Math.abs(computeSignedPolygonArea(polygon)), 0);
+  if (holed) area += side * side - Math.abs(computeSignedPolygonArea(holed[1]));
+  return area / (side * side);
+}
+
+// 輪を切れ目で切り、周に沿って時計回りに閉じる本体。自分と交わる輪への備えを通さない (試験で閉じる向きを確かめるために公開する)。
+export function projectOrientedAreaRing(ring, projection, frame, side) {
+  const polar = moveVerticesOffCuts(ring.map((point) => frame.orientedToPolar(point)), frame);
+  const closedPolar = pointsEqual(polar[0], polar[polar.length - 1], 0) ? polar.slice(0, -1) : polar;
+  if (closedPolar.length < 3) return { polygons: [], holed: null };
+
+  // 輪を切れ目で切って鎖にする。鎖は (入る交点, 輪の頂点…, 出る交点)。
+  const events = [];
+  for (let index = 0; index < closedPolar.length; index += 1) {
+    const a = closedPolar[index];
+    const b = closedPolar[(index + 1) % closedPolar.length];
+    for (const crossing of findCutCrossings(a, b, frame)) events.push({ index, crossing });
   }
 
-  return parts;
+  const toOriented = (point) => frame.polarToOriented(point);
+  if (!events.length) {
+    const projected = projectLine(projection, [...closedPolar, closedPolar[0]].map(toOriented));
+    if (!hasRenderablePolygon(projected, side * side * 1e-12)) return { polygons: [], holed: null };
+    const southPole = frame.polarToOriented([0, -90]);
+    const outsideContainsCorners = geoContains({ type: 'Polygon', coordinates: [[...ring, ring[0]]] }, southPole);
+    if (!outsideContainsCorners) return { polygons: [projected], holed: null };
+    return { polygons: [], holed: [frame.corners, projected] };
+  }
+
+  // events は (辺の番号, 辺の上の割合) の順。交点 order の次の鎖は、その辺の終わりの頂点から、次の交点が乗る
+  // 辺の始まりの頂点まで。最後の交点からは輪を一周して最初の交点へ戻る。
+  const n = closedPolar.length;
+  const chains = events.map((event, order) => {
+    const next = events[(order + 1) % events.length];
+    let count = (next.index - event.index + n) % n;
+    if (count === 0 && order === events.length - 1) count = n;
+    const points = [crossingPoint(event.crossing, event.crossing.to, frame)];
+    for (let step = 1; step <= count; step += 1) {
+      points.push(toOriented(closedPolar[(event.index + step) % n]));
+    }
+    points.push(crossingPoint(next.crossing, next.crossing.from, frame));
+    return {
+      projected: projectLine(projection, points),
+      startKey: crossingKey(event.crossing, event.crossing.to, frame),
+      endKey: crossingKey(next.crossing, next.crossing.from, frame),
+    };
+  });
+
+  return { polygons: rejoinChainsAlongSquare(chains, frame), holed: null };
+}
+
+function rejoinChainsAlongSquare(chains, frame) {
+  const period = 8 * 90;
+  const cornerKeys = [0, 2, 4, 6].map((halfEdge) => halfEdge * 90);
+  const forward = (from, to) => ((to - from) % period + period) % period;
+  const used = new Set();
+  const polygons = [];
+
+  for (let first = 0; first < chains.length; first += 1) {
+    if (used.has(first)) continue;
+    const points = [];
+    let current = first;
+    while (!used.has(current)) {
+      used.add(current);
+      const chain = chains[current];
+      points.push(...chain.projected.slice(1, -1));
+      points.push(frame.snapToEdge(chain.projected[chain.projected.length - 1]));
+      // 出た所から時計回りに、いちばん近い鎖の始まりへ進む。
+      let next = first;
+      let best = Infinity;
+      chains.forEach((candidate, index) => {
+        if (used.has(index) && index !== first) return;
+        const distance = forward(chain.endKey, candidate.startKey);
+        if (distance < best) {
+          best = distance;
+          next = index;
+        }
+      });
+      cornerKeys
+        .map((key, corner) => ({ corner, distance: forward(chain.endKey, key) }))
+        .filter(({ distance }) => distance > 0 && distance < best)
+        .sort((a, b) => a.distance - b.distance)
+        .forEach(({ corner }) => points.push(frame.corners[corner]));
+      points.push(frame.snapToEdge(chains[next].projected[0]));
+      current = next;
+    }
+    if (hasRenderablePolygon(points, 1e-12)) polygons.push(points);
+  }
+  return polygons;
 }
 
 function shouldProjectSubpathAsArea(element, subpath, style, context) {
+  if (subpath.points.length < 3 || !hasVisibleFill(style)) return false;
+  if (!hasVisibleStroke(style)) return true;
+  // 線も持つ塗りは、閉じていれば輪郭線として描く。開いたまま地図の幅いっぱいに渡って南北の端に触れるもの
+  // (極を囲む塗り) だけは塗りとして描く。
   const tag = localName(element);
-  if (tag !== 'path' && tag !== 'polyline') return false;
-  if (subpath.closed || subpath.points.length < 3 || !hasVisibleFill(style)) return false;
-  if (isPolarSpanningOpenAreaSubpath(subpath, context)) return true;
-  return !hasVisibleStroke(style);
+  return !subpath.closed && (tag === 'path' || tag === 'polyline') && isPolarSpanningOpenAreaSubpath(subpath, context);
+}
+
+// 元の正距円筒の平面での塗りの輪を、球面の多角形として投影する。平面で反時計回り (経度を右・緯度を上に
+// 取ったとき) の輪は内側が左にあるので、内側が右に来るよう逆にしてから向きの回転をかける。極を囲む輪
+// (地図の幅いっぱいに渡る輪) も、この向きで極の側が内側になる。
+function buildProjectedAreaParts(points, context) {
+  const original = points.map((point) => sourcePointToOriginalLonLat(point, context));
+  const planarArea = computeSignedPolygonArea(original);
+  if (!planarArea) return [];
+  // 地図の上端・下端に乗る頂点は球面では極の 1 点に重なり、経度が意味を持たない。極を囲む輪は極を通らなくても
+  // 囲む向きで決まるので、極の上の頂点は輪から外す。
+  const wound = (planarArea > 0 ? [...original].reverse() : original)
+    .filter(([, lat]) => Math.abs(lat) < 90 - 1e-9);
+  const ring = dedupeSequentialPoints(wound.map((lonLat) => orientLonLat(lonLat, context)).filter(Boolean), 1e-12);
+  if (ring.length < 3) return [];
+  const { polygons, holed } = projectSphericalAreaRing(
+    ring,
+    context.areaProjection,
+    context.cutFrame,
+    context.side,
+    planarRegionSphereFraction(original),
+  );
+  const parts = polygons.map((polygon) => buildPathDataFromPoints(polygon, true)).filter(Boolean);
+  if (holed) {
+    parts.push({ pathData: holed.map((polygon) => buildPathDataFromPoints(polygon, true)).join(''), fillRule: 'evenodd' });
+  }
+  return parts;
 }
 
 function buildProjectedPath(element, matrix, style, context) {
   const subpaths = sampleGeometry(element, matrix, context.options);
   const parts = [];
-  let fillRuleOverride = null;
-  const isFillOnlyArea = hasVisibleFill(style) && !hasVisibleStroke(style);
 
   for (const subpath of subpaths) {
     if (!subpath.points.length) continue;
+    if (shouldProjectSubpathAsArea(element, subpath, style, context)) {
+      parts.push(...buildProjectedAreaParts(subpath.points, context));
+      continue;
+    }
+
     const orientedSubpath = transformSubpathToFrame(subpath, context);
     if (!orientedSubpath.points.length) continue;
     const points = unwrapPeriodicX(orientedSubpath.points, context.frame.width);
-    const isSouthPolarFill = isSouthPolarSpanningFilledSubpath(orientedSubpath, style, context) && !hasVisibleStroke(style);
     const coordinates = points.map((point) => framePointToLonLat(point, context));
-    if (isSouthPolarFill) {
-      const polarParts = buildPolarSectorProjectedPaths(points, context);
-      if (polarParts.length) {
-        parts.push(...polarParts.map((pathData) => normalizeProjectedFilledAreaPath(pathData, context)).filter(Boolean));
-        if (polarParts.length > 1) {
-          fillRuleOverride = 'evenodd';
-        }
-        continue;
-      }
-    }
-
     if (subpath.closed) {
       if (coordinates.length < 3) continue;
       const ring = closeCoordinateRing(coordinates);
       const projected = context.pathBuilder({ type: 'LineString', coordinates: ring }) || '';
-      let closedProjected = closeProjectedPath(projected);
-      if (isFillOnlyArea) {
-        closedProjected = normalizeProjectedFilledAreaPath(closedProjected, context);
-      } else {
-        closedProjected = stripWorldBoundarySubpaths(closedProjected, context.side);
-      }
+      const closedProjected = stripWorldBoundarySubpaths(closeProjectedPath(projected), context.side);
       if (closedProjected) parts.push(closedProjected);
-    } else if (shouldProjectSubpathAsArea(element, orientedSubpath, style, context)) {
-      if (coordinates.length < 3) continue;
-      if (isSouthPolarSpanningOpenAreaSubpath(orientedSubpath, context)) {
-        const polarParts = buildPolarSectorProjectedPaths(points, context);
-        parts.push(...polarParts.map((pathData) => normalizeProjectedFilledAreaPath(pathData, context)).filter(Boolean));
-        if (polarParts.length > 1) {
-          fillRuleOverride = 'evenodd';
-        }
-      } else {
-        const ring = closeCoordinateRing(coordinates);
-        const projected = context.pathBuilder({ type: 'Polygon', coordinates: [ring] }) || '';
-        const stripped = normalizeProjectedFilledAreaPath(projected, context);
-        if (stripped) parts.push(stripped);
-      }
     } else if (coordinates.length >= 2) {
       const projected = buildProjectedOpenLinePath(coordinates, context);
       if (projected) parts.push(projected);
     }
   }
 
-  return { parts, fillRuleOverride };
+  return parts;
 }
 
 function replaceGeometryNode(element, matrix, style, context) {
@@ -1676,17 +1344,20 @@ function replaceGeometryNode(element, matrix, style, context) {
     return;
   }
 
-  const { parts, fillRuleOverride } = buildProjectedPath(element, matrix, style, context);
-  const atomicParts = parts.flatMap((part) => explodePathDataToAtomicParts(part));
-  const outputParts = atomicParts.length ? atomicParts : [''];
-  const replacements = outputParts.map((pathData, index) => {
+  // 文字列の部分は subpath ごとに別の path へ分ける。くり抜きのある塗り ({ pathData, fillRule }) は一つの path のまま出す。
+  const parts = buildProjectedPath(element, matrix, style, context);
+  const atomicParts = parts.flatMap((part) => (
+    typeof part === 'string' ? explodePathDataToAtomicParts(part).map((pathData) => ({ pathData })) : [part]
+  ));
+  const outputParts = atomicParts.length ? atomicParts : [{ pathData: '' }];
+  const replacements = outputParts.map(({ pathData, fillRule }, index) => {
     const pathElement = context.document.createElementNS(SVG_NS, 'path');
     const skip = new Set(GEOMETRY_ATTRIBUTES);
     if (index > 0) skip.add('id');
     copyAttributes(element, pathElement, skip);
     pathElement.setAttribute('d', pathData);
-    if (fillRuleOverride && outputParts.length === 1) {
-      pathElement.setAttribute('fill-rule', fillRuleOverride);
+    if (fillRule) {
+      pathElement.setAttribute('fill-rule', fillRule);
     }
     if (outputParts.length > 1) {
       pathElement.setAttribute('data-pq-fragment', `${index + 1}/${outputParts.length}`);
@@ -1889,7 +1560,7 @@ function createContext(document, root, options) {
   const frame = findMapFrame(root);
   const side = options.outputSide || frame.width || viewBox.width || 2048;
   const sourceScale = detectSourceScale(root, viewBox) || 1;
-  const { projection, pathBuilder } = buildProjection(side, options.pathPrecision);
+  const { projection, pathBuilder, areaProjection, cutFrame } = buildProjection(side, options.pathPrecision);
   return {
     document,
     root,
@@ -1903,6 +1574,8 @@ function createContext(document, root, options) {
     rotation: geoRotation([-options.centerLon, -options.centerLat, options.roll]),
     projection,
     pathBuilder,
+    areaProjection,
+    cutFrame,
     options,
     stats: {
       geometryCount: 0,
@@ -1934,6 +1607,12 @@ function normalizeTransformOptions(options = {}) {
       : DEFAULT_OPTIONS.centerLon;
   const centerLat = Number.isFinite(options.centerLat) ? options.centerLat : DEFAULT_OPTIONS.centerLat;
   const roll = Number.isFinite(options.roll) ? options.roll : DEFAULT_OPTIONS.roll;
+  // 刻み幅が 0 だと線分の分割が終わらず、メモリを使い切る。
+  for (const key of ['sampleStep', 'pathPrecision']) {
+    if (options[key] !== undefined && !(Number.isFinite(options[key]) && options[key] > 0)) {
+      throw new Error(`${key} must be a positive number.`);
+    }
+  }
   return {
     ...DEFAULT_OPTIONS,
     ...options,

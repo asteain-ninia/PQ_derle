@@ -5,7 +5,12 @@ import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { geoPeirceQuincuncial } from 'd3-geo-projection';
 import { geoRotation } from 'd3-geo';
 import { SVGPathData } from 'svg-pathdata';
+import { Resvg } from '@resvg/resvg-js';
 import { transformSvgString } from '../src/transform.js';
+import { sweepToTransformOrientation } from '../src/orientation.js';
+import { renderSweepCase } from '../src/sweep-core.js';
+import { prepareSweepSourceSvg } from '../src/sweep-source-svg.js';
+import { rasterizeSweepSource } from '../scripts/lib/sweep-source-raster.mjs';
 
 const SVG_FIXTURE = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="360" height="180" viewBox="0 0 360 180">
@@ -311,30 +316,43 @@ test('transformSvgString emits split contour fragments as separate path elements
   }
 });
 
-test('transformSvgString keeps contour fills from tracing around the square to rejoin split pieces', async () => {
+// sweep は元画像の画素を逆投影して描くので、切れ目のまわりでも正しい。最終 SVG を同じ寸法で描き、sweep と
+// 色が大きく違う画素の割合を見る。塗りを切れ目の所で誤って閉じると、正方形の一部が丸ごと塗られて跳ね上がる
+// (お手紙 2026-11-22 の指摘 1。直す前は sweep (0,-90,0) で 46%、(-15,-30,45) で 7%)。
+test('transformSvgString draws the same map as the sweep, also across the square edges', async () => {
   const sampleSvg = await readFile(new URL('../イラレ出界図.svg', import.meta.url), 'utf8');
-  const contourGroups = ['_第一分高面', '_第二分高面', '_第三分高面', '_第四分高面', '_第五分高面'];
-
-  for (const options of [
-    { outputSide: 720 },
-    { centerLon: 45, centerLat: -30, roll: 45, outputSide: 720 },
+  const size = 360;
+  const source = rasterizeSweepSource(sampleSvg, 3072);
+  for (const sweepCase of [
+    { centerLon: 0, centerLat: -90, roll: 0 },
+    { centerLon: -15, centerLat: -30, roll: 45 },
+    { centerLon: 45, centerLat: -60, roll: 30 },
+    { centerLon: -53, centerLat: 90, roll: 45 }, // 最終 SVG の既定の向き (-143, 0, 0)
   ]) {
-    const result = await transformSvgString(sampleSvg, options, { DOMParser, XMLSerializer });
-    const document = parseDocument(result.svgText);
-
-    for (const groupId of contourGroups) {
-      const group = Array.from(document.getElementsByTagName('g'))
-        .find((node) => node.getAttribute('id') === groupId);
-      assert.ok(group, `Missing ${groupId}`);
-
-      const paths = Array.from(group.getElementsByTagName('path'));
-      if (!paths.length) continue;
-
-      const worstEdgeRun = paths.reduce(
-        (max, node) => Math.max(max, maxDrawnEdgeRun(node.getAttribute('d') || '', options.outputSide)),
-        0,
-      );
-      assert.ok(worstEdgeRun < 50, `${groupId} still contains a contour edge run of ${worstEdgeRun}`);
+    const sweep = renderSweepCase(source, sweepCase, { outputSize: size }).pixels;
+    const result = await transformSvgString(
+      sampleSvg,
+      { ...sweepToTransformOrientation(sweepCase), outputSide: size },
+      { DOMParser, XMLSerializer },
+    );
+    const final = new Resvg(prepareSweepSourceSvg(result.svgText, { DOMParser, XMLSerializer }), {
+      fitTo: { mode: 'width', value: size },
+      background: 'rgba(0,0,0,0)',
+    }).render().pixels;
+    let differing = 0;
+    for (let offset = 0; offset < size * size * 4; offset += 4) {
+      const difference = Math.abs(sweep[offset] - final[offset])
+        + Math.abs(sweep[offset + 1] - final[offset + 1])
+        + Math.abs(sweep[offset + 2] - final[offset + 2]);
+      if (difference > 90) differing += 1;
     }
+    const share = differing / (size * size);
+    assert.ok(share < 0.01, `${JSON.stringify(sweepCase)}: ${(share * 100).toFixed(2)}% of the pixels differ`);
+  }
+});
+
+test('transformSvgString refuses a zero or non-finite sample step instead of looping forever', async () => {
+  for (const options of [{ sampleStep: 0 }, { sampleStep: Number.NaN }, { pathPrecision: 0 }, { sampleStep: -1 }]) {
+    await assert.rejects(() => transformSvgString(SVG_FIXTURE, options, { DOMParser, XMLSerializer }), /must be a positive number/);
   }
 });
