@@ -228,7 +228,12 @@ function createApp() {
 function getInitialManifestUrls() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('manifest')) {
-    return [new URL(params.get('manifest'), window.location.href)];
+    // manifest の中の文字列は画面に埋め込むので、同じ origin の manifest だけを読む。
+    const url = new URL(params.get('manifest'), window.location.href);
+    if (url.origin !== window.location.origin) {
+      throw new Error(`manifest は同じ origin のものだけ読めます: ${url.href}`);
+    }
+    return [url];
   }
   return DEFAULT_SWEEP_MANIFEST_PATHS.map((value) => new URL(value, window.location.origin));
 }
@@ -333,8 +338,8 @@ function updateDatasetMeta() {
     : 'none';
 
   refs.datasetMeta.innerHTML = `
-    <div><dt>viewer cases</dt><dd>${state.sweepManifest.caseCount}</dd></div>
-    <div><dt>source cases</dt><dd>${sourceCaseCount}</dd></div>
+    <div><dt>viewer cases</dt><dd>${escapeHtml(state.sweepManifest.caseCount)}</dd></div>
+    <div><dt>source cases</dt><dd>${escapeHtml(sourceCaseCount)}</dd></div>
     <div><dt>lon step</dt><dd>${formatAngleLabel(state.sweepIndex.lonStep, 0)}°</dd></div>
     <div><dt>lat step</dt><dd>${formatAngleLabel(state.sweepIndex.latStep, 0)}°</dd></div>
     <div><dt>roll step</dt><dd>${formatAngleLabel(state.sweepIndex.rollStep, 0)}°</dd></div>
@@ -505,7 +510,7 @@ function renderNeighbors() {
   refs.neighborStrip.innerHTML = neighbors
     .map((neighbor) => `
       <button class="sqv-neighbor" type="button" data-case-key="${escapeHtml(neighbor.entry.caseKey ?? String(neighbor.entry.caseId))}">
-        <span>${neighbor.label}</span>
+        <span>${escapeHtml(neighbor.label)}</span>
         <strong>${formatAngleLabel(neighbor.entry.centerLon)} / ${formatAngleLabel(neighbor.entry.centerLat)} / ${formatAngleLabel(neighbor.entry.roll)}</strong>
       </button>
     `)

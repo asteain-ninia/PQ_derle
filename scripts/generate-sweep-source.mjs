@@ -4,10 +4,15 @@
 //   node scripts/generate-sweep-source.mjs [sweep-dir] [--input=<元 SVG>] [--source-width=<幅>]
 //
 // source-width を省略すると manifest.json の sourceWidth を使う。それも無い古い manifest では
-// sourceFrame の大きさに一致する幅を探す (resvg のフレーム切り出しは幅 + 1 画素になることが多い)。
+// sourceFrame の大きさに一致する幅を探す (以前の切り出しは、指定より幅が 1 画素広くなっていた)。
 // 一致しないときは止まる (違う画像でライブ描画すると PNG と見た目が合わなくなるため)。
+// render-cache.json があれば、ケース PNG を描いた元画像の画素とも照合し、違えば止まる (SVG を直した後に
+// これだけ走らせると、ライブ描画が古いケース PNG・ランキングと黙って食い違うため。そのときは sweep を
+// 走らせ直す)。render-cache.json の無い古い出力では、大きさしか照合できない。
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs } from './lib/cli-options.mjs';
+import { hashSourceImage, readRenderCache } from './lib/sweep-render-cache.mjs';
 import {
   SOURCE_IMAGE_FILE_NAME,
   encodePng,
@@ -15,20 +20,6 @@ import {
 } from './lib/sweep-source-raster.mjs';
 
 const DEFAULT_SWEEP_DIR = 'out/sweep-full-defaults';
-
-function parseArgs(argv) {
-  const positional = [];
-  const options = {};
-  for (const arg of argv) {
-    if (arg.startsWith('--')) {
-      const [key, rawValue] = arg.slice(2).split('=');
-      options[key] = rawValue ?? 'true';
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { positional, options };
-}
 
 function candidateWidths(manifest, explicitWidth) {
   if (explicitWidth !== undefined) {
@@ -67,6 +58,18 @@ async function main() {
   }
   if (!sourceImage) {
     throw new Error('manifest の sourceFrame と同じ大きさの元画像を作れませんでした。--source-width を指定してください。');
+  }
+
+  const renderCache = await readRenderCache(sweepDir);
+  if (renderCache) {
+    if (renderCache.key.sourceImageSha256 !== hashSourceImage(sourceImage)) {
+      throw new Error(
+        'この sweep のケース PNG は、今の SVG から作った元画像とは違う画素で描かれています '
+        + '(render-cache.json の sourceImageSha256 が合いません)。npm run sweep で作り直してください。',
+      );
+    }
+  } else {
+    console.warn('render-cache.json が無いので、元画像の大きさしか照合できません。');
   }
 
   const outputPath = path.join(sweepDir, SOURCE_IMAGE_FILE_NAME);

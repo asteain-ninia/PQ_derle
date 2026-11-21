@@ -262,7 +262,12 @@ function createApp() {
 function getInitialManifestUrls() {
   const params = new URLSearchParams(window.location.search);
   if (params.get('manifest')) {
-    return [new URL(params.get('manifest'), window.location.href)];
+    // manifest の中の文字列は画面に埋め込むので、同じ origin の manifest だけを読む。
+    const url = new URL(params.get('manifest'), window.location.href);
+    if (url.origin !== window.location.origin) {
+      throw new Error(`manifest は同じ origin のものだけ読めます: ${url.href}`);
+    }
+    return [url];
   }
   return DEFAULT_MANIFEST_PATHS.map((value) => new URL(value, window.location.origin));
 }
@@ -332,8 +337,8 @@ function ensureSelectedCase() {
 
 function updateDatasetMeta() {
   refs.datasetMeta.innerHTML = `
-    <div><dt>cases</dt><dd>${state.manifest.caseCount}</dd></div>
-    <div><dt>output</dt><dd>${state.manifest.outputSize}px</dd></div>
+    <div><dt>cases</dt><dd>${escapeHtml(state.manifest.caseCount)}</dd></div>
+    <div><dt>output</dt><dd>${escapeHtml(state.manifest.outputSize)}px</dd></div>
     <div><dt>source</dt><dd>${escapeHtml(state.manifest.inputFile || 'unknown')}</dd></div>
     <div><dt>hotspot</dt><dd>${state.manifest.distortionField.hotspotThreshold.toFixed(3)}</dd></div>
     <div><dt>clip max</dt><dd>${state.manifest.distortionField.clipMax.toFixed(3)}</dd></div>
@@ -369,12 +374,12 @@ function renderRanking() {
   refs.rankingBody.innerHTML = visibleCases.length
     ? visibleCases
       .map((entry, index) => `
-        <tr class="${entry.caseId === state.selectedCaseId ? 'is-selected' : ''}" data-case-id="${entry.caseId}">
+        <tr class="${entry.caseId === state.selectedCaseId ? 'is-selected' : ''}" data-case-id="${escapeHtml(entry.caseId)}">
           <td>${index + 1}</td>
           <td>
-            <button class="sra-row-button" type="button" data-case-id="${entry.caseId}">
+            <button class="sra-row-button" type="button" data-case-id="${escapeHtml(entry.caseId)}">
               <strong>${escapeHtml(entry.label)}</strong>
-              <span>case ${entry.caseId}</span>
+              <span>case ${escapeHtml(entry.caseId)}</span>
             </button>
           </td>
           <td>${entry.metrics.geoMeanDistortion.toFixed(3)}</td>
@@ -528,7 +533,7 @@ function renderCaseMeta(selected) {
       <div><dt>roll</dt><dd>${formatAngleLabel(selected.roll, 2)}</dd></div>
       <div><dt>最終 SVG 用</dt><dd>${escapeHtml(formatTransformArguments(selected))}</dd></div>
       <div><dt>ocean RGB</dt><dd>${selected.oceanColor.map((value) => value.toFixed(0)).join(', ')}</dd></div>
-      <div><dt>land px</dt><dd>${selected.landPixelCount}</dd></div>
+      <div><dt>land px</dt><dd>${escapeHtml(selected.landPixelCount)}</dd></div>
     `;
   updateViewerLink(selected);
 }

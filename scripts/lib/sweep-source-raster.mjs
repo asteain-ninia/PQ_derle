@@ -61,12 +61,6 @@ function findMapFrame(root) {
   };
 }
 
-function detectSourceScale(root, viewBox) {
-  const width = Number.parseFloat(root.getAttribute('width') || '0');
-  if (!viewBox.width || !Number.isFinite(width) || width <= 0) return 1;
-  return width / viewBox.width;
-}
-
 export function parseSvgMetadata(svgText) {
   const document = new DOMParser().parseFromString(svgText, 'image/svg+xml');
   const root = document.documentElement;
@@ -80,54 +74,36 @@ export function parseSvgMetadata(svgText) {
 
   const viewBox = getViewBox(root);
   const frame = findMapFrame(root);
-  const sourceScale = detectSourceScale(root, viewBox);
   if (!(frame.width > 0 && frame.height > 0)) {
     throw new Error('Could not detect a valid 2:1 map frame.');
   }
-  return { viewBox, frame, sourceScale };
+  return { viewBox, frame };
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function cropRenderedFrame(renderedImage, metadata) {
-  const { viewBox, frame } = metadata;
-  const scaleX = renderedImage.width / viewBox.width;
-  const scaleY = renderedImage.height / viewBox.height;
-  const left = clamp(Math.floor((frame.x - viewBox.x) * scaleX), 0, renderedImage.width - 1);
-  const top = clamp(Math.floor((frame.y - viewBox.y) * scaleY), 0, renderedImage.height - 1);
-  const right = clamp(Math.ceil((frame.x + frame.width - viewBox.x) * scaleX), left + 1, renderedImage.width);
-  const bottom = clamp(Math.ceil((frame.y + frame.height - viewBox.y) * scaleY), top + 1, renderedImage.height);
-  const width = Math.max(1, right - left);
-  const height = Math.max(1, bottom - top);
-  const pixels = new Uint8ClampedArray(width * height * 4);
-  const source = renderedImage.pixels;
-
-  for (let y = 0; y < height; y += 1) {
-    const sourceOffset = ((top + y) * renderedImage.width + left) * 4;
-    const targetOffset = y * width * 4;
-    pixels.set(source.subarray(sourceOffset, sourceOffset + width * 4), targetOffset);
-  }
-
-  return {
-    width,
-    height,
-    pixels,
-  };
-}
-
-export function rasterizeSourceFrame(svgText, metadata, sourceWidth) {
-  const zoom = sourceWidth / (metadata.frame.width * metadata.sourceScale);
-  const resvg = new Resvg(svgText, {
-    fitTo: { mode: 'zoom', value: zoom },
+// viewBox をフレームそのものにして、フレームがちょうど sourceWidth 画素の幅になるよう描く。
+// 文書全体を描いてから切り出すと、フレームの縁が画素の境に乗らず、両端に半透明の列が付いて幅も 1 画素
+// 増える (経度 180° の所に淡い線が出る)。
+function rasterizeSourceFrame(svgText, metadata, sourceWidth) {
+  const { frame } = metadata;
+  const document = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+  const root = document.documentElement;
+  root.setAttribute('viewBox', `${frame.x} ${frame.y} ${frame.width} ${frame.height}`);
+  root.setAttribute('width', String(frame.width));
+  root.setAttribute('height', String(frame.height));
+  root.setAttribute('preserveAspectRatio', 'none');
+  const resvg = new Resvg(new XMLSerializer().serializeToString(document), {
+    fitTo: { mode: 'width', value: Math.round(sourceWidth) },
     imageRendering: 0,
     shapeRendering: 2,
     textRendering: 1,
     background: 'rgba(0,0,0,0)',
   });
   const rendered = resvg.render();
-  const frameImage = cropRenderedFrame(rendered, metadata);
+  const frameImage = {
+    width: rendered.width,
+    height: rendered.height,
+    pixels: new Uint8ClampedArray(rendered.pixels),
+  };
   return {
     ...frameImage,
     background: estimateBackgroundColor(frameImage),

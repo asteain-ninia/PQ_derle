@@ -28,6 +28,8 @@ URL クエリで差し替えできます。
 /sweep-viewer.html?manifest=/out/other-sweep/manifest.json
 ```
 
+読めるのは、画面と同じ origin の manifest だけです (manifest の中の文字列を画面に埋め込むため)。
+
 ## ライブ描画の元画像
 
 `npm run sweep` は各ケースの PNG と一緒に `source-equirect.png` (各ケースを描いたのと同じ元画像) を書き、
@@ -42,7 +44,8 @@ npm run sweep-source -- out/other-sweep --source-width=3072
 
 `--source-width` を省略すると manifest の `sourceWidth`、それも無ければ manifest の `sourceFrame` と
 同じ大きさになる幅を探します (`out/sweep-full-defaults` は 2048 でした)。sweep と違う幅で作ると
-PNG と見た目が合わなくなるので、合わないときは止まります。
+PNG と見た目が合わなくなるので、合わないときは止まります。`render-cache.json` がある出力では、ケース PNG を
+描いた元画像の画素とも照合し、違えば止まります (元 SVG を直した後は `npm run sweep` で作り直します)。
 `out/sweep*/` は git 管理外なので、元画像もリポジトリには入りません (sweep 出力と同じ扱い)。
 
 ## 描画方式

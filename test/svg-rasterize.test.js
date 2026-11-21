@@ -99,3 +99,18 @@ test('renderSvgToPng renders a png at requested width', () => {
   assert.equal(rendered.outputHeight, 60);
   assert.ok(rendered.pngBuffer.length > 0);
 });
+
+test('filterSvgNamedLayers keeps named groups inside defs and clipPath', () => {
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20">
+  <defs>
+    <clipPath id="clip"><g id="_切り抜き"><rect x="0" y="0" width="20" height="20" /></g></clipPath>
+    <symbol id="mark"><g id="_印"><circle cx="2" cy="2" r="2" /></g></symbol>
+  </defs>
+  <g id="_海" clip-path="url(#clip)"><rect x="0" y="0" width="40" height="20" fill="#77aadd" /></g>
+  <g id="_文字"><use href="#mark" /></g>
+</svg>`;
+  assert.deepEqual(listSvgNamedLayers(svg, { DOMParser, XMLSerializer }).map((layer) => layer.id), ['_海', '_文字']);
+  const filtered = filterSvgNamedLayers(svg, { includeLayers: ['_海'] }, { DOMParser, XMLSerializer });
+  assert.deepEqual(getLayerIds(parseDocument(filtered.svgText)), ['_切り抜き', '_印', '_海']);
+});

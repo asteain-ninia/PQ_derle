@@ -3,6 +3,7 @@ import path from 'node:path';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { transformSvgString } from '../src/transform.js';
 import { sweepToTransformOrientation } from '../src/orientation.js';
+import { parseArgs, parseBoolean, parseNumberOption } from './lib/cli-options.mjs';
 
 function printUsage() {
   console.log(`Usage:
@@ -12,20 +13,6 @@ function printUsage() {
   --from-sweep: center-lon / center-lat / roll を sweep・ビューア・ランキングの向きとして読み、
                 最終 SVG で同じ地図になる向きへ読み替えてから変換します。
 `);
-}
-
-function parseArgs(argv) {
-  const positional = [];
-  const options = {};
-  for (const arg of argv) {
-    if (arg.startsWith('--')) {
-      const [key, rawValue] = arg.slice(2).split('=');
-      options[key] = rawValue ?? 'true';
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { positional, options };
 }
 
 function formatOrientation({ centerLon, centerLat, roll }) {
@@ -42,14 +29,13 @@ async function main() {
 
   const [inputPath, outputPath] = positional;
   const sourceSvg = await fs.readFile(inputPath, 'utf8');
+  const centerLon = parseNumberOption(options['center-lon'], parseNumberOption(options.lon0, -143));
   let orientation = {
-    centerLon: options['center-lon'] ? Number(options['center-lon']) : (
-      options.lon0 ? Number(options.lon0) : -143
-    ),
-    centerLat: options['center-lat'] ? Number(options['center-lat']) : 0,
-    roll: options.roll ? Number(options.roll) : 0,
+    centerLon,
+    centerLat: parseNumberOption(options['center-lat'], 0),
+    roll: parseNumberOption(options.roll, 0),
   };
-  if (options['from-sweep'] === 'true') {
+  if (parseBoolean(options['from-sweep'], false)) {
     const sweepOrientation = orientation;
     orientation = sweepToTransformOrientation(sweepOrientation);
     console.error(`sweep の向き ${formatOrientation(sweepOrientation)} を、最終 SVG の向き ${formatOrientation(orientation)} として変換します。`);
@@ -59,9 +45,9 @@ async function main() {
     {
       ...orientation,
       lon0: orientation.centerLon,
-      sampleStep: options['sample-step'] ? Number(options['sample-step']) : 3,
-      pathPrecision: options['path-precision'] ? Number(options['path-precision']) : 0.35,
-      outputSide: options.side ? Number(options.side) : null,
+      sampleStep: parseNumberOption(options['sample-step'], 3),
+      pathPrecision: parseNumberOption(options['path-precision'], 0.35),
+      outputSide: parseNumberOption(options.side, null),
     },
     { DOMParser, XMLSerializer },
   );

@@ -59,8 +59,19 @@ function describeLayer(node) {
   };
 }
 
+// defs・clipPath・symbol などの中の <g> は描く内容ではなく定義の部品なので、レイヤーとして数えない
+// (--include-layer で残す対象から外れて消され、参照する側の切り抜きや use が壊れるため)。
+const DEFINITION_CONTAINERS = new Set(['defs', 'clipPath', 'mask', 'symbol', 'pattern', 'marker', 'linearGradient', 'radialGradient', 'filter']);
+
+function isInsideDefinition(node) {
+  for (let current = node.parentNode; current && current.nodeType === 1; current = current.parentNode) {
+    if (DEFINITION_CONTAINERS.has(localName(current))) return true;
+  }
+  return false;
+}
+
 function collectNamedLayerNodes(root) {
-  return Array.from(root.getElementsByTagName('g')).filter(isNamedLayerNode);
+  return Array.from(root.getElementsByTagName('g')).filter((node) => isNamedLayerNode(node) && !isInsideDefinition(node));
 }
 
 function normalizeLayerTokens(tokens = []) {

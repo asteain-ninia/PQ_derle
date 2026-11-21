@@ -27,6 +27,8 @@ URL クエリで差し替えできます。
 /sweep-ranking.html?manifest=/out/other-sweep/ranking-manifest.json
 ```
 
+読めるのは、画面と同じ origin の manifest だけです (manifest の中の文字列を画面に埋め込むため)。
+
 ## 画面の切り替え
 
 ランキング一覧と詳細は縦に積まず、上部の切替バーで入れ替えて表示します。

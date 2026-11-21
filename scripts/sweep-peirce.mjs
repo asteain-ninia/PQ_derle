@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseArgs, parseBoolean, parseNumberOption } from './lib/cli-options.mjs';
 import {
   DEFAULT_SWEEP_OPTIONS,
   buildSweepCaseFileName,
@@ -32,38 +33,6 @@ function printUsage() {
     [--lon-min=-180] [--lon-max=180] [--lat-min=-90] [--lat-max=90]
     [--skip-existing=true|false] [--html=true|false] [--limit=<count>] [--dry-run]
 `);
-}
-
-function parseArgs(argv) {
-  const positional = [];
-  const options = {};
-  for (const arg of argv) {
-    if (arg.startsWith('--')) {
-      const [key, rawValue] = arg.slice(2).split('=');
-      options[key] = rawValue ?? 'true';
-    } else {
-      positional.push(arg);
-    }
-  }
-  return { positional, options };
-}
-
-function parseBoolean(value, defaultValue) {
-  if (value === undefined) return defaultValue;
-  if (typeof value === 'boolean') return value;
-  const normalized = String(value).trim().toLowerCase();
-  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
-  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
-  throw new Error(`Invalid boolean value: ${value}`);
-}
-
-function parseNumberOption(value, fallback) {
-  if (value === undefined) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new Error(`Invalid numeric value: ${value}`);
-  }
-  return parsed;
 }
 
 async function fileExists(targetPath) {

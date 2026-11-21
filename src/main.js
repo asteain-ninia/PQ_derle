@@ -38,17 +38,17 @@ function createApp() {
         <form id="controls" class="controls">
           <label>
             <span>centerLon</span>
-            <input id="center-lon" type="number" step="0.1" value="${DEFAULT_OPTIONS.centerLon}" />
+            <input id="center-lon" type="number" step="any" value="${DEFAULT_OPTIONS.centerLon}" />
           </label>
 
           <label>
             <span>centerLat</span>
-            <input id="center-lat" type="number" step="0.1" min="-90" max="90" value="${DEFAULT_OPTIONS.centerLat}" />
+            <input id="center-lat" type="number" step="any" min="-90" max="90" value="${DEFAULT_OPTIONS.centerLat}" />
           </label>
 
           <label>
             <span>roll</span>
-            <input id="roll" type="number" step="0.1" value="${DEFAULT_OPTIONS.roll}" />
+            <input id="roll" type="number" step="any" value="${DEFAULT_OPTIONS.roll}" />
           </label>
 
           <label>
