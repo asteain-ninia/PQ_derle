@@ -76,6 +76,12 @@ test('a small square straddling a cut becomes two small pieces on the edge', () 
     assert.equal(result.holed, null);
     assert.equal(result.polygons.length, 2, `cut ${lon}`);
     assert.ok(result.polygons.every(touchesEdge));
+    // 切れ目の両側は同じ辺の左右の半分に描く。端点が反対側の半分に飛ぶと、縁に沿う筋になる。
+    const halves = result.polygons.map((polygon) => new Set(polygon
+      .filter(([x, y]) => Math.min(x, y, SIDE - x, SIDE - y) < 1e-6)
+      .map((point) => Math.floor(frame.perimeterPosition(point) / (SIDE / 2)))));
+    assert.ok(halves.every((set) => set.size === 1), `cut ${lon}`);
+    assert.notDeepEqual([...halves[0]], [...halves[1]]);
     assert.ok(fraction(result) < 0.01, `cut ${lon}: ${fraction(result)}`);
     // 自分と交わる輪への備え (逆向きと比べる処理) を通さなくても小さく閉じる。時計回りに閉じる向きそのものが正しい。
     assert.ok(fraction(projectOrientedAreaRing(polarRing(square), projection, frame, SIDE)) < 0.01);

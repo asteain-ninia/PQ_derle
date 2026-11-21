@@ -1019,10 +1019,19 @@ export function createPeirceCutFrame(projection, side) {
   const orientedToPolar = (lonLat) => toPolarRotation.invert(projectionRotation(lonLat));
   const polarToOriented = (lonLat) => projectionRotation.invert(toPolarRotation(lonLat));
 
-  // 正方形の辺の中点 (切れ目の先端) を逆投影して、切れ目の経度を求める。
+  // 正方形の辺の中点 (切れ目の先端) を逆投影して、切れ目の経度を求める。逆投影は縁の近くで 1e-6° ほど
+  // ずれ、端点を寄せる量 CUT_NUDGE より大きいと、切れ目の反対側の縁に描いてしまう。切れ目は対称性から
+  // 45° + 90°k ちょうどなので、その角度に合わせる (大きく外れたら投影の定義が変わったので止める)。
   const raw = geoPeirceQuincuncial().rotate([0, 0, 0]).fitExtent([[-1, -1], [1, 1]], { type: 'Sphere' });
   const cutLongitudes = [[0, -1], [1, 0], [0, 1], [-1, 0]]
-    .map((point) => toPolarRotation.invert(raw.invert(point.map((value) => value * (1 - 1e-9))))[0])
+    .map((point) => {
+      const lon = toPolarRotation.invert(raw.invert(point.map((value) => value * (1 - 1e-9))))[0];
+      const exact = Math.round((lon - 45) / 90) * 90 + 45;
+      if (Math.abs(lon - exact) > 1e-3) {
+        throw new Error(`Unexpected Peirce quincuncial cut longitude: ${lon}`);
+      }
+      return normalizeLongitude(exact);
+    })
     .sort((a, b) => a - b);
 
   const corners = [[0, 0], [side, 0], [side, side], [0, side]];
