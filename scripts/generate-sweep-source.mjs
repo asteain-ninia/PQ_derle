@@ -36,10 +36,12 @@ function candidateWidths(manifest, explicitWidth) {
   return [frameWidth - 1];
 }
 
-// 今の切り出しと同じ大きさか、以前の切り出し (縦横とも 1 画素広い) で作った大きさなら一致とみなす。
+// 今の切り出しと同じ大きさか、以前の切り出し (縦と横を別々に切り上げていたので、どちらも 1 画素広いことがある)
+// で作った大きさなら一致とみなす。
 function matchesFrame(image, expected) {
   if (!expected) return true;
-  return [0, 1].some((extra) => image.width + extra === expected.width && image.height + extra === expected.height);
+  const fits = (actual, wanted) => wanted === actual || wanted === actual + 1;
+  return fits(image.width, expected.width) && fits(image.height, expected.height);
 }
 
 async function main() {
@@ -64,7 +66,10 @@ async function main() {
     console.warn(`source-width=${width} では ${image.width}x${image.height} になり、manifest の ${expected.width}x${expected.height} と合いません。`);
   }
   if (!sourceImage) {
-    throw new Error('manifest の sourceFrame と同じ大きさの元画像を作れませんでした。--source-width を指定してください。');
+    throw new Error(
+      'manifest の sourceFrame と同じ大きさの元画像を作れませんでした。--source-width を指定するか、'
+      + 'npm run sweep で sweep を作り直してください。',
+    );
   }
 
   const renderCache = await readRenderCache(sweepDir);

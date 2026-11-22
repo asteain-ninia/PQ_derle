@@ -1087,7 +1087,7 @@ function findCutCrossings(a, b, frame) {
   return crossings.sort((x, y) => x.t - y.t);
 }
 
-// 切れ目のちょうど上や南極にある頂点は、どちらの縁に描くかが決まらないので、隣の頂点の側へわずかに寄せる。
+// 切れ目のちょうど上にある頂点は、どちらの縁に描くかが決まらないので、手前の頂点の側へわずかに寄せる。
 function moveVerticesOffCuts(ring, frame) {
   const sideOf = (point) => {
     let best = null;
@@ -1099,20 +1099,20 @@ function moveVerticesOffCuts(ring, frame) {
     });
     return best;
   };
-  const moved = ring.map((point) => [point[0], Math.max(point[1], -90 + CUT_NUDGE)]);
+  // 南極 (四隅) にちょうど乗る頂点は経度が決まらないので外す。前後の頂点を結ぶ弧が、南極のすぐ脇を通る。
+  const moved = ring.filter((point) => point[1] > -90 + CUT_NUDGE);
   for (let index = 0; index < moved.length; index += 1) {
     const onCut = sideOf(moved[index]);
     if (!onCut) continue;
+    // 寄せる側は、前へたどって最初に切れ目の大円の面から外れる頂点の側にする。切れ目に沿って並ぶ頂点 (元の
+    // 地図の経度 180° の縁が切れ目に重なる向きなど) が全部同じ側に寄り、輪が切れ目をジグザグにまたがない。
+    // 南極を越えて向かいの切れ目に続く頂点も同じ大円の上にあるので、外れた頂点とは数えない。面から外れたかは
+    // 経度の差で測る (切れ目の上とみなした頂点にも 1e-9 度ほどの誤差があり、それで側を決めてはならない)。
     const lon = frame.cutLongitudes[onCut.cut];
     let sign = 0;
     for (let offset = 1; offset < moved.length && !sign; offset += 1) {
-      for (const neighbor of [moved[(index + offset) % moved.length], moved[(index - offset + moved.length) % moved.length]]) {
-        const delta = normalizeLongitude(neighbor[0] - lon);
-        if (Math.abs(delta) >= CUT_NUDGE * 4) {
-          sign = Math.sign(delta);
-          break;
-        }
-      }
+      const delta = normalizeLongitude(moved[(index - offset + moved.length) % moved.length][0] - lon);
+      if (Math.min(Math.abs(delta), 180 - Math.abs(delta)) >= CUT_NUDGE * 4) sign = Math.sign(Math.sin(delta * RADIANS));
     }
     moved[index] = [lon + (sign || 1) * CUT_NUDGE * 2, moved[index][1]];
   }

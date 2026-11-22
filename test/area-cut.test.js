@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { geoRotation } from 'd3-geo';
 import { geoPeirceQuincuncial } from 'd3-geo-projection';
 import {
   createPeirceCutFrame,
@@ -120,4 +121,19 @@ test('a ring around the centre is a disc, and the same ring reversed is the squa
   assert.equal(holed.polygons.length, 0);
   assert.ok(holed.holed);
   assert.ok(Math.abs(fraction(holed) + fraction(disc) - 1) < 0.01);
+});
+
+test('a ring whose edge runs along a cut and through a corner stays small', () => {
+  // この向きでは元の地図の経度 180° の線が、切れ目 2 本 (南極で向かい合う) に重なる。箱の東の辺はその上を走り、
+  // 南極 (正方形の隅) をちょうど通る。切れ目の上の頂点を寄せる側が並びの途中で食い違うと、輪が切れ目を
+  // ジグザグにまたぎ、正方形の 6 割を塗っていた。
+  const rotate = geoRotation([-180, -85, 0]);
+  const box = [];
+  for (let lon = 60; lon < 180; lon += 1) box.push([lon, 0]);
+  for (let lat = 0; lat > -40; lat -= 1) box.push([180, lat]);
+  for (let lon = 180; lon > 60; lon -= 1) box.push([lon, -40]);
+  for (let lat = -40; lat < 0; lat += 1) box.push([60, lat]);
+  const result = projectOrientedAreaRing(box.map((point) => rotate(point)), projection, frame, SIDE);
+  const expected = planarRegionSphereFraction(box);
+  assert.ok(Math.abs(fraction(result) - expected) < 0.05, `${fraction(result)} vs ${expected}`);
 });
