@@ -166,9 +166,8 @@ function updateDownload() {
     link.href = state.outputUrl;
     link.classList.remove('disabled');
     const stem = (state.fileName || 'map').replace(/\.svg$/i, '');
-    const centerLon = document.querySelector('#center-lon').value || DEFAULT_OPTIONS.centerLon;
-    const centerLat = document.querySelector('#center-lat').value || DEFAULT_OPTIONS.centerLat;
-    const roll = document.querySelector('#roll').value || DEFAULT_OPTIONS.roll;
+    // 入力欄を読み直さず、変換に実際に使った値で名付ける (欄の読み方が食い違うと、別の向きを名乗るため)。
+    const { centerLon, centerLat, roll } = state.stats;
     link.download = `${stem}_peirceq_lon${formatToken(centerLon)}_lat${formatToken(centerLat)}_roll${formatToken(roll)}.svg`;
   } else {
     link.removeAttribute('href');
